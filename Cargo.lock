@@ -75,6 +75,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "countersign-proxy"
+version = "0.1.0"
+dependencies = [
+ "countersign-verify",
+ "p256",
+ "sha2",
+ "signetd",
+]
+
+[[package]]
 name = "countersign-sql"
 version = "0.1.0"
 dependencies = [

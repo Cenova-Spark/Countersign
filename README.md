@@ -87,6 +87,7 @@ SQL is. All database intelligence lives in an optional pack, which is why
 | [`countersign-db`](crates/countersign-db) | The first domain pack. SQL → severity, blast radius, and what the device should show. |
 | [`countersign-audit`](crates/countersign-audit) | Hash-chained audit trails that export without disclosing a single query. |
 | [`signetd`](crates/signetd) | **The daemon.** Owns the device, classifies environments, enforces policy, and writes the trail — plus the stdio MCP bridge Claude Code spawns. |
+| [`countersign-proxy`](crates/countersign-proxy) | **Posture C.** A PostgreSQL wire proxy that refuses statements nobody countersigned. No agent integration at all. |
 
 Specs live in [`spec/`](spec/), with machine-readable test vectors in
 [`spec/vectors/`](spec/vectors/) — including a **published** test keypair whose
@@ -101,8 +102,8 @@ Try it end to end, with no hardware, in two terminals — see
 
 ### What is not here yet
 
-SSH socket forwarding, the reference database wire proxy, the SDKs, and the
-firmware. Roughly in that order — see [Build order](#build-order).
+The SDKs, the cloud-agent relay, and the firmware. See
+[Build order](#build-order).
 
 Some of that is blocked by this workspace having been built offline; those items
 and the versions to revisit are in [`BLOCKED.md`](BLOCKED.md).
@@ -228,15 +229,15 @@ cable.
 4. ~~`signetd` with `--device=mock` — policy, environment classification, the
    trail on disk~~ ✅
 5. ~~MCP server — the first demoable milestone, and it needs no hardware~~ ✅
-6. SSH socket forwarding — cheap, and the difference between "works on my
-   laptop" and "works how engineers actually operate"
-7. Reference Postgres proxy — the coverage story, and the first posture-C artifact
+6. ~~SSH socket forwarding — cheap, and the difference between "works on my
+   laptop" and "works how engineers actually operate"~~ ✅
+7. ~~Reference Postgres proxy — the coverage story, and the first posture-C artifact~~ ✅
 8. TS SDK + local HTTP/WS
 9. Client integrations at whichever execution chokepoint each one has
 10. Relay for cloud agents
 11. Swap mock for hardware
 
-Steps 6–9 are entirely independent of hardware progress.
+Steps 8–10 are entirely independent of hardware progress.
 
 ---
 

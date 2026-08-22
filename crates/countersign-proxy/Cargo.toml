@@ -1,0 +1,18 @@
+[package]
+name = "countersign-proxy"
+description = "A PostgreSQL wire proxy that refuses statements nobody countersigned. Posture C."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "countersign-proxy"
+path = "src/main.rs"
+
+[dependencies]
+countersign-verify = { path = "../countersign-verify", version = "0.1.0" }
+signetd = { path = "../signetd", version = "0.1.0" }
+p256 = { version = "0.14.0-rc.10", default-features = false, features = ["ecdsa", "alloc"] }
+sha2 = { workspace = true }
