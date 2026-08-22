@@ -1,0 +1,12 @@
+[package]
+name = "countersign-pack"
+description = "The Countersign domain-pack plugin interface: protocol types, a stdio harness for pack authors, and a host that enforces the pack security rules."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

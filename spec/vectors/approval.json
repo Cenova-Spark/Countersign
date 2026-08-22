@@ -1,0 +1,22 @@
+{
+  "digest_short": "df47273eeace",
+  "envelope": {
+    "bundle": {
+      "decision": "approved",
+      "request_digest": "df47273eeace278f3e8afe53e134abc429924e4c729d7de2f919378095fc1f90",
+      "signatures": [
+        {
+          "counter": 41235,
+          "device_id": "d2eed8cf599a13c5cc39434b64307a75431fc6b95eb7ceeee7ecb94e40023f1a",
+          "device_unix_ms": 1755859200123,
+          "dwell_ms": 2140,
+          "signature": "KvSIeEH8pqSC_ah6AaXXysjXIa8YpLHIcAhTUeMVRusZozAxjxfkyQSwG5PQxojkMUTovxeLA6Cio3nNCzFszw"
+        }
+      ],
+      "v": 1
+    },
+    "request_json": "{\"action\":\"sql.execute\",\"advisory\":{\"dependents\":3,\"reversible\":false,\"rows_affected\":4200000},\"nonce\":\"Y291bnRlcnNpZ24tdGVzdC12ZWN0b3Itbm9uY2UtMDE\",\"requester\":{\"id\":\"claude-code\",\"instance\":\"vector-session\"},\"statement\":\"DROP TABLE users;\",\"target\":{\"kind\":\"database\",\"uri_fingerprint\":\"860e238e58a1004aaf5fdcfd236fecb87cb5641653a276374e1492b92dfde478\"},\"ttl_ms\":60000,\"v\":1}"
+  },
+  "note": "A complete approved envelope signed by the PUBLISHED TEST KEY. A conforming verifier accepts it only with accept_test_keys enabled.",
+  "signing_payload_hex": "636f756e7465727369676e2d763100df47273eeace278f3e8afe53e134abc429924e4c729d7de2f919378095fc1f90000000000000a11300000198d15d287b"
+}

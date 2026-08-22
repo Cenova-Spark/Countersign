@@ -1,0 +1,17 @@
+[package]
+name = "countersign-db"
+description = "The Countersign database domain pack: SQL statement classification, blast-radius estimation, and device render hints."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "countersign-db"
+path = "src/main.rs"
+
+[dependencies]
+countersign-pack = { path = "../countersign-pack", version = "0.1.0" }
+countersign-sql = { path = "../countersign-sql", version = "0.1.0" }
+serde_json = { workspace = true }

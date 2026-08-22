@@ -1,0 +1,8 @@
+{
+  "WARNING": "The private key below is PUBLIC. Anything it signs is worthless. Verifiers reject it unless accept_test_keys is explicitly set.",
+  "curve": "P-256",
+  "derivation": "private scalar = SHA-256(\"countersign-v1 published test key\")",
+  "device_id": "d2eed8cf599a13c5cc39434b64307a75431fc6b95eb7ceeee7ecb94e40023f1a",
+  "private_key_hex": "3cfa2f57ae4799fed4ad70dea5fcb68df9c977a10c4e117278ed692165543bf0",
+  "public_key_sec1_uncompressed_hex": "04c1739e11c48000768fb4306de915a398a88f6fa96128872ebf52c17607d48f1443e01e4ccd89e10419ce1942d4b525c89488dc461372f8bcb728b09326691d98"
+}

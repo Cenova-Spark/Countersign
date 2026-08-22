@@ -1,0 +1,14 @@
+{
+  "authority": {
+    "authority_id": "908ce72de48f1942b38f1302ded09664b13ed685b1489a2f224b410a6db53cc3",
+    "derivation": "private scalar = SHA-256(\"countersign-v1 published test enrollment authority\")",
+    "private_key_hex": "fa640c9cb38ffb8d0bf3b94b95445b1163f71a53f5206c62301476c1a6c3351a",
+    "public_key_sec1_uncompressed_hex": "04301b069c04ace7e00eb456882bb7e9d811085638b8c5fef00883ad014b1dc214be71f70d14edaa7cd402d9da609058c9d4c080402937940ab622abe6a5b1cb88"
+  },
+  "note": "A countersigned enrollment proof and a roster signed by the PUBLISHED TEST AUTHORITY key. Both private halves are public; nothing here is trustworthy.",
+  "roster_signing_payload_hex": "636f756e7465727369676e2d726f737465722d763100f3d8375079d77373edec9cdc8556dc8344ea0da9ab6c68df477b16ccbc272209",
+  "signed_roster": {
+    "roster_json": "{\"authority_id\":\"908ce72de48f1942b38f1302ded09664b13ed685b1489a2f224b410a6db53cc3\",\"issued_at_unix_ms\":1755000000000,\"records\":[{\"device_id\":\"d2eed8cf599a13c5cc39434b64307a75431fc6b95eb7ceeee7ecb94e40023f1a\",\"enrolled_at_unix_ms\":1755000000000,\"is_test_key\":true,\"operator\":{\"subject\":\"alice@example.com\"},\"proof\":{\"bundle\":{\"decision\":\"approved\",\"request_digest\":\"43d0d7a8dec86f35f7fdd8ee1f6998b4e91d8eea38f593506a5f984883173844\",\"signatures\":[{\"counter\":1,\"device_id\":\"d2eed8cf599a13c5cc39434b64307a75431fc6b95eb7ceeee7ecb94e40023f1a\",\"device_unix_ms\":1755000000000,\"dwell_ms\":1980,\"signature\":\"5FHbRRbj22dG8xfX7965bRPO4iSxKgczl7g5P259eBs6UtjREV-3P40zQ8ONIpvcpk-hS4G7Ufo19uvLHzB_Gw\"}],\"v\":1},\"request_json\":\"{\\\"action\\\":\\\"countersign.enroll\\\",\\\"nonce\\\":\\\"Y291bnRlcnNpZ24tdGVzdC12ZWN0b3Itbm9uY2UtMDI\\\",\\\"requester\\\":{\\\"id\\\":\\\"countersign-cli\\\",\\\"instance\\\":\\\"enrolment\\\"},\\\"statement\\\":\\\"Enroll this device as an approver for alice@example.com\\\",\\\"target\\\":{\\\"kind\\\":\\\"enrollment\\\",\\\"uri_fingerprint\\\":\\\"ff8d9819fc0e12bf0d24892e45987e249a28dce836a85cad60e28eaaa8c6d976\\\"},\\\"ttl_ms\\\":120000,\\\"v\\\":1}\"},\"public_key_hex\":\"04c1739e11c48000768fb4306de915a398a88f6fa96128872ebf52c17607d48f1443e01e4ccd89e10419ce1942d4b525c89488dc461372f8bcb728b09326691d98\",\"status\":{\"state\":\"active\"}}],\"serial\":1,\"v\":1}",
+    "signature": "ZYqY1Or-Ke9meoB8wcTNhLZh55Hf-y_281IRNOuKyzkbndN3lCtu3M-F0N89dE70NdEJ-nkMY704Y-yLT7nWVQ"
+  }
+}

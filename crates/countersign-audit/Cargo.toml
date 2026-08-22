@@ -1,0 +1,14 @@
+[package]
+name = "countersign-audit"
+description = "Hash-chained, tamper-evident Countersign audit trails that export without disclosing any query text."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+countersign-verify = { path = "../countersign-verify", version = "0.1.0" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }

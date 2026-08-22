@@ -1,0 +1,25 @@
+[package]
+name = "countersign-verify"
+description = "Standalone verification for Countersign approval signatures. No daemon, no USB, no network."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[features]
+default = ["ecdsa-p256"]
+# The signature backend is a feature so canonicalization, digests, bundle
+# parsing and policy can be compiled — and audited — with no crypto dependency
+# at all. A proxy that already links a vetted P-256 implementation should not be
+# made to carry a second one.
+ecdsa-p256 = ["dep:p256"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+p256 = { version = "0.14.0-rc.10", optional = true, default-features = false, features = [
+    "ecdsa",
+    "alloc",
+] }

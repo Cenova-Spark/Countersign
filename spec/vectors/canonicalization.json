@@ -1,0 +1,82 @@
+{
+  "accept": [
+    {
+      "canonical": "{\"a\":2,\"b\":1}",
+      "digest_sha256": "d3626ac30a87e6f7a6428233b3c68299976865fa5508e4267c5415c76af7a772",
+      "input": "{\"b\":1,\"a\":2}",
+      "name": "key ordering"
+    },
+    {
+      "canonical": "{\"y\":\"x\",\"z\":[1,{\"a\":null,\"b\":true}]}",
+      "digest_sha256": "1cecf3c9f62f5df2252979489a4350f50e77508a19f72414bb668aa88ab72f06",
+      "input": "{\"z\":[1,{\"b\":true,\"a\":null}],\"y\":\"x\"}",
+      "name": "nested and array"
+    },
+    {
+      "canonical": "{\"a\":1}",
+      "digest_sha256": "015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862",
+      "input": "  {\n \"a\" : 1 \n}  ",
+      "name": "whitespace is insignificant"
+    },
+    {
+      "canonical": "{\"u\":\"a/b\"}",
+      "digest_sha256": "5c9a1bdf01d49cf98b890bf319f4160f69876127a85839d71e952f73b8a61e8c",
+      "input": "{\"u\":\"a/b\"}",
+      "name": "solidus is not escaped"
+    },
+    {
+      "canonical": "{\"s\":\"tab\\there\\nand\\ranewline\"}",
+      "digest_sha256": "31bd3564d5af3b42076638cd906b08a3384cee77a1039df73acd7a7536c2c4f2",
+      "input": "{\"s\":\"tab\\there\\nand\\ranewline\"}",
+      "name": "short escapes are preferred"
+    },
+    {
+      "canonical": "{\"s\":\"\\u0001\"}",
+      "digest_sha256": "8d4f0e5fe4a5bba1edb70f8fefc66bfede576b92884d96ea3f2e58f099712594",
+      "input": "{\"s\":\"\\u0001\"}",
+      "name": "other controls take lowercase backslash-u"
+    },
+    {
+      "canonical": "{\"s\":\"café ☕\"}",
+      "digest_sha256": "e48d2e238d662d54921c056d0c7fcb1b33f5ca156970f163369a0ed9607023b0",
+      "input": "{\"s\":\"café ☕\"}",
+      "name": "non-ascii travels as utf-8"
+    },
+    {
+      "canonical": "{\"𐅀\":2,\"�\":1}",
+      "digest_sha256": "5e6d681f94f769b0bacb6fbf8b44397fc9e584049704341a1d9f48cc6cb9bc41",
+      "input": "{\"�\":1,\"𐅀\":2}",
+      "name": "utf-16 key order puts astral planes first"
+    },
+    {
+      "canonical": "{\"hi\":9007199254740991,\"lo\":-9007199254740991}",
+      "digest_sha256": "9de90938b1329f1749f32422c9e7ff27b012a0103749ec3c3e817204e64d2d5d",
+      "input": "{\"hi\":9007199254740991,\"lo\":-9007199254740991}",
+      "name": "safe integer bounds"
+    },
+    {
+      "canonical": "{\"a\":{},\"b\":[]}",
+      "digest_sha256": "aeeba1e56a144077f89e26c930dad7cf933e9383cfb8e33ddff618233b29be76",
+      "input": "{\"a\":{},\"b\":[]}",
+      "name": "empty containers"
+    }
+  ],
+  "note": "RFC 8785 with the Countersign v1 integer restriction. See spec/countersign-v1.md §3.",
+  "reject": [
+    {
+      "input": "{\"a\":1.5}",
+      "name": "non-integer number",
+      "reason": "unsupported_number"
+    },
+    {
+      "input": "{\"a\":9007199254740992}",
+      "name": "integer above 2^53-1",
+      "reason": "unsupported_number"
+    },
+    {
+      "input": "{\"a\":1,\"a\":2}",
+      "name": "duplicate key",
+      "reason": "duplicate_key"
+    }
+  ]
+}

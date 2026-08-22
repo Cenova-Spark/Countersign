@@ -1,0 +1,9 @@
+Countersign
+Copyright 2026 The Countersign authors
+
+This product includes software developed for AddisDB
+(https://addisdb.com), relicensed under Apache License 2.0 by its
+copyright holder.
+
+Specifically, `crates/countersign-sql` originates in AddisDB's
+`core/src/sql_text.rs` and `core/src/safety.rs`.

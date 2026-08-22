@@ -1,0 +1,32 @@
+# Countersign — a physical human-authorization protocol.
+#
+# One workspace rather than the six repos the handoff sketched. The wire format
+# and the things that verify it change together, and a cross-repo version dance
+# on every field addition would slow exactly the phase where the format is still
+# moving. Splitting later is mechanical; merging later is not.
+#
+# `signet-firmware` stays out of here regardless — it has its own lifecycle,
+# its own toolchain, and no reason to share a CI run with a Rust workspace.
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+# Apache 2.0 everywhere, deliberately. The goal is that DBeaver, DataGrip and
+# anyone else implements Countersign for free; copyleft would work against that.
+# Sell the device, give away the standard.
+rust-version = "1.75"
+authors = ["The Countersign authors"]
+
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
