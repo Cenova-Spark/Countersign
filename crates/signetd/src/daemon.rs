@@ -92,6 +92,31 @@ pub struct ApprovalResponse {
     pub envelope: Option<ApprovalEnvelope>,
 }
 
+/// Which socket a request arrived on.
+///
+/// A forwarded socket is a delegation: anything on the far side of an SSH
+/// tunnel can ask, not just the person who opened it. The blast radius is
+/// bounded — every approval still needs a physical turn over a displayed
+/// payload — but the display becomes the whole defence, so the daemon has to
+/// know which side a request came from in order to say so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OriginKind {
+    /// A client on this machine.
+    Local,
+    /// Reached us through a forwarded socket — typically SSH `RemoteForward`.
+    Forwarded,
+}
+
+impl OriginKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OriginKind::Local => "local",
+            OriginKind::Forwarded => "forwarded",
+        }
+    }
+}
+
 /// Where a request came from, as far as the daemon can actually tell.
 ///
 /// `connection` is assigned by the daemon when it accepted the socket, so a
@@ -101,11 +126,22 @@ pub struct ApprovalResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Origin {
     pub connection: u64,
+    pub kind: OriginKind,
 }
 
 impl Origin {
     pub fn new(connection: u64) -> Self {
-        Self { connection }
+        Self {
+            connection,
+            kind: OriginKind::Local,
+        }
+    }
+
+    pub fn forwarded(connection: u64) -> Self {
+        Self {
+            connection,
+            kind: OriginKind::Forwarded,
+        }
     }
 }
 
@@ -209,6 +245,7 @@ impl Daemon {
                 action: &refined_action,
                 requester_id: &request.requester_id,
                 severity,
+                origin: origin.kind,
                 device_attached: true,
             },
         );
@@ -260,7 +297,7 @@ impl Daemon {
                     request_digest: request_digest.clone(),
                     digest_short: digest_short.clone(),
                     severity,
-                    requester: describe_requester(request, &self.last_presented),
+                    requester: describe_requester(request, &self.last_presented, origin),
                     requester_changed,
                     ttl_ms: wire.ttl_ms,
                 };
@@ -427,16 +464,32 @@ impl Daemon {
 /// The claimed id and instance are exactly that — claims — so they are labelled
 /// as unverified. What is *not* a claim is that this is a different connection
 /// from the last one, and that is the part the acknowledgement is keyed on.
-fn describe_requester(request: &ApprovalRequest, last: &Option<LastPresented>) -> String {
+fn describe_requester(
+    request: &ApprovalRequest,
+    last: &Option<LastPresented>,
+    origin: Origin,
+) -> String {
     let claimed = if request.requester_instance.is_empty() {
         request.requester_id.clone()
     } else {
         format!("{} · {}", request.requester_id, request.requester_instance)
     };
 
+    // A forwarded request comes from somewhere the operator is not sitting, and
+    // that fact leads — it is the most important thing on the line.
+    let prefix = match origin.kind {
+        OriginKind::Local => "",
+        OriginKind::Forwarded => "VIA FORWARDED SOCKET · ",
+    };
+
     match last {
-        Some(previous) => format!("{claimed} (claimed) — previously {}", previous.claimed_id),
-        None => format!("{claimed} (claimed)"),
+        Some(previous) => {
+            format!(
+                "{prefix}{claimed} (claimed) — previously {}",
+                previous.claimed_id
+            )
+        }
+        None => format!("{prefix}{claimed} (claimed)"),
     }
 }
 

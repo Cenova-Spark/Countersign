@@ -85,6 +85,15 @@ pub struct Rule {
     /// Only apply at or above this severity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_severity: Option<Severity>,
+    /// Only apply to requests arriving on this kind of socket.
+    ///
+    /// The scoping hook for delegation: a forwarded socket hands the ability
+    /// to ask to everything on the far side of a tunnel, so an operator will
+    /// often want it to reach fewer actions than a local client does. Set
+    /// `origin = "forwarded"` on a tighter rule and place it above the general
+    /// one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::daemon::OriginKind>,
     pub decision: RuleDecision,
 }
 

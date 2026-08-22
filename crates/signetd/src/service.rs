@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::daemon::{ApprovalRequest, ApprovalResponse, Daemon, Origin};
+use crate::daemon::{ApprovalRequest, ApprovalResponse, Daemon, Origin, OriginKind};
 
 /// Methods the control socket accepts.
 pub mod method {
@@ -50,6 +50,14 @@ pub struct DeviceStatus {
 pub struct AuditSummary {
     pub entries: usize,
     pub head: String,
+}
+
+/// The default socket a forwarded tunnel should land on.
+pub fn forward_socket_path() -> PathBuf {
+    if let Ok(explicit) = std::env::var("COUNTERSIGN_FORWARD_SOCK") {
+        return PathBuf::from(explicit);
+    }
+    crate::daemon::runtime_dir().join("countersign-forward.sock")
 }
 
 /// The default socket path.
@@ -88,10 +96,44 @@ fn check_socket_path(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Serve the control socket until the process is killed.
-pub fn serve(daemon: Daemon, path: &Path) -> std::io::Result<()> {
+/// Serve the control socket, and optionally a second socket for forwarding,
+/// until the process is killed.
+///
+/// Two listeners rather than one, because SSH `RemoteForward` connects back to
+/// a local socket and the daemon otherwise cannot tell a tunnelled request from
+/// a local one — they arrive identically. Giving forwarding its own socket is
+/// what makes "this came from somewhere you are not sitting" a fact the daemon
+/// knows rather than a guess.
+pub fn serve(daemon: Daemon, path: &Path, forward_path: Option<&Path>) -> std::io::Result<()> {
     check_socket_path(path)?;
 
+    let listener = bind_socket(path)?;
+    let daemon = Arc::new(Mutex::new(daemon));
+
+    // Every accepted connection gets an id the peer cannot choose and cannot
+    // obtain from another peer. It is the only thing about a requester that
+    // this daemon can actually verify, so the continuity check keys on it
+    // rather than on anything the request claims about itself.
+    //
+    // Shared across both listeners, so a local and a forwarded client can never
+    // collide on an id and look like each other.
+    let connections = Arc::new(AtomicU64::new(1));
+
+    if let Some(forward_path) = forward_path {
+        check_socket_path(forward_path)?;
+        let forward = bind_socket(forward_path)?;
+        let daemon = Arc::clone(&daemon);
+        let connections = Arc::clone(&connections);
+        std::thread::spawn(move || {
+            accept_loop(forward, daemon, connections, OriginKind::Forwarded);
+        });
+    }
+
+    accept_loop(listener, daemon, connections, OriginKind::Local);
+    Ok(())
+}
+
+fn bind_socket(path: &Path) -> std::io::Result<UnixListener> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
         // The directory is the access control, so tighten it before the socket
@@ -113,15 +155,15 @@ pub fn serve(daemon: Daemon, path: &Path) -> std::io::Result<()> {
 
     let listener = UnixListener::bind(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(listener)
+}
 
-    let daemon = Arc::new(Mutex::new(daemon));
-
-    // Every accepted connection gets an id the peer cannot choose and cannot
-    // obtain from another peer. It is the only thing about a requester that
-    // this daemon can actually verify, so the continuity check keys on it
-    // rather than on anything the request claims about itself.
-    let connections = AtomicU64::new(1);
-
+fn accept_loop(
+    listener: UnixListener,
+    daemon: Arc<Mutex<Daemon>>,
+    connections: Arc<AtomicU64>,
+    kind: OriginKind,
+) {
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(s) => s,
@@ -131,14 +173,17 @@ pub fn serve(daemon: Daemon, path: &Path) -> std::io::Result<()> {
             }
         };
         let daemon = Arc::clone(&daemon);
-        let origin = Origin::new(connections.fetch_add(1, Ordering::Relaxed));
+        let id = connections.fetch_add(1, Ordering::Relaxed);
+        let origin = match kind {
+            OriginKind::Local => Origin::new(id),
+            OriginKind::Forwarded => Origin::forwarded(id),
+        };
         std::thread::spawn(move || {
             if let Err(e) = handle_connection(stream, daemon, origin) {
                 eprintln!("signetd: connection ended: {e}");
             }
         });
     }
-    Ok(())
 }
 
 fn handle_connection(

@@ -117,6 +117,59 @@ The device also refuses a turn that arrives too fast to have read the payload �
 payload restarts that clock, so a request timed to arrive mid-gesture cannot
 borrow it.
 
+## Working over SSH
+
+You are on your laptop with the device. The agent is on a box you SSH'd into.
+This is the `ssh-agent` problem and it has the same shape as the answer.
+
+Start the daemon with a second socket for tunnelled clients:
+
+```bash
+./target/debug/signetd run --forward
+```
+
+Then forward it, exactly as you would `SSH_AUTH_SOCK`:
+
+```
+# ~/.ssh/config
+Host devbox
+  RemoteForward /run/user/1000/countersign.sock /run/user/1000/countersign-forward.sock
+```
+
+On the remote host, point clients at the forwarded socket:
+
+```bash
+export COUNTERSIGN_SOCK=/run/user/1000/countersign.sock
+```
+
+**Forwarding is delegation.** Anything on that remote host can now ask — not
+only the agent you meant. The blast radius is bounded, because every approval
+still needs a physical turn over a payload you can read, but that display is now
+the entire defence. So:
+
+- Requests arriving on the forward socket are shown as
+  `VIA FORWARDED SOCKET · …`, leading the requester line.
+- A forwarded client counts as a different requester from your local one, so
+  switching between them takes an acknowledgement.
+- Policy can scope them. Put a tighter rule above the general one:
+
+```toml
+[[policy.rule]]
+tier = "production"
+origin = "forwarded"
+actions = ["sql.ddl"]
+decision = "deny"          # DDL from a tunnel is never even offered
+
+[[policy.rule]]
+tier = "production"
+actions = ["sql"]
+decision = "require_approval"
+```
+
+The two sockets exist because SSH `RemoteForward` connects back to a local
+socket — a tunnelled request and a local one arrive identically, and the daemon
+would otherwise be guessing.
+
 ## Device modes
 
 | Mode | Behaviour |

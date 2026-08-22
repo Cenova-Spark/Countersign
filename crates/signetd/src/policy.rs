@@ -7,6 +7,7 @@
 use countersign_pack::Severity;
 
 use crate::config::{Classification, Config, OnNoDevice, Rule, RuleDecision, Tier};
+use crate::daemon::OriginKind;
 
 /// What the daemon will do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +42,9 @@ pub struct Evaluation<'a> {
     pub requester_id: &'a str,
     /// Effective severity: the pack's answer already raised to the tier floor.
     pub severity: Severity,
+    /// Which socket this arrived on. Verified, unlike anything the requester
+    /// says about itself.
+    pub origin: OriginKind,
     /// Whether a device is currently attached.
     pub device_attached: bool,
 }
@@ -187,6 +191,11 @@ fn rule_matches(rule: &Rule, tier: Tier, eval: &Evaluation<'_>) -> bool {
             return false;
         }
     }
+    if let Some(want) = rule.origin {
+        if want != eval.origin {
+            return false;
+        }
+    }
     true
 }
 
@@ -257,10 +266,20 @@ decision = "auto_approve"
     }
 
     fn eval<'a>(action: &'a str, severity: Severity, attached: bool) -> Evaluation<'a> {
+        eval_from(action, severity, attached, OriginKind::Local)
+    }
+
+    fn eval_from<'a>(
+        action: &'a str,
+        severity: Severity,
+        attached: bool,
+        origin: OriginKind,
+    ) -> Evaluation<'a> {
         Evaluation {
             action,
             requester_id: "claude-code",
             severity,
+            origin,
             device_attached: attached,
         }
     }
@@ -300,6 +319,65 @@ decision = "auto_approve"
         let d = decide(&"ff".repeat(32), "sql.ddl", Severity::Critical, true);
         assert_eq!(d.outcome, Outcome::RequireApproval);
         assert_eq!(d.classification.tier, Tier::Production);
+    }
+
+    #[test]
+    fn a_forwarded_socket_can_be_scoped_more_tightly_than_a_local_one() {
+        // Forwarding is delegation: everything on the far side of the tunnel
+        // gains the ability to ask. An operator will often want it to reach
+        // fewer actions than a client sitting on their own machine.
+        let c = Config::parse(&format!(
+            r#"
+[[environment]]
+label = "prod"
+tier = "production"
+uri_fingerprints = ["{PROD_FP}"]
+
+[[policy.rule]]
+tier = "production"
+origin = "forwarded"
+actions = ["sql.ddl"]
+decision = "deny"
+
+[[policy.rule]]
+tier = "production"
+actions = ["sql"]
+decision = "require_approval"
+"#
+        ))
+        .unwrap();
+        let class = c.classify(PROD_FP);
+
+        let forwarded = evaluate(
+            &c,
+            &class,
+            &eval_from("sql.ddl", Severity::Critical, true, OriginKind::Forwarded),
+        );
+        assert!(
+            matches!(forwarded.outcome, Outcome::Deny { .. }),
+            "got {:?}",
+            forwarded.outcome
+        );
+
+        // The same statement from a local client still just asks.
+        let local = evaluate(
+            &c,
+            &class,
+            &eval_from("sql.ddl", Severity::Critical, true, OriginKind::Local),
+        );
+        assert_eq!(local.outcome, Outcome::RequireApproval);
+    }
+
+    #[test]
+    fn a_rule_without_an_origin_applies_to_both() {
+        for origin in [OriginKind::Local, OriginKind::Forwarded] {
+            let d = evaluate(
+                &config(),
+                &config().classify(PROD_FP),
+                &eval_from("sql.ddl", Severity::Critical, true, origin),
+            );
+            assert_eq!(d.outcome, Outcome::RequireApproval, "{origin:?}");
+        }
     }
 
     #[test]

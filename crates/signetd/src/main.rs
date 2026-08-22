@@ -17,7 +17,7 @@ use signetd::daemon::{runtime_dir, Daemon};
 use signetd::device::{Device, MockAction, MockBehaviour, MockDevice};
 use signetd::interactive::InteractiveDevice;
 use signetd::mcp;
-use signetd::service::{self, socket_path};
+use signetd::service::{self, forward_socket_path, socket_path};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -50,6 +50,7 @@ fn print_help() {
          \n\
          USAGE\n\
          \x20 signetd run [--device=MODE] [--config=PATH]   start the daemon\n\
+         \x20             [--forward[=PATH]]                  also listen for forwarded clients\n\
          \x20 signetd mcp                                   stdio MCP bridge (Claude Code spawns this)\n\
          \x20 signetd status                                report daemon and device state\n\
          \x20 signetd fingerprint <uri>                     compute a config fingerprint\n\
@@ -68,12 +69,17 @@ fn print_help() {
 fn run(args: &[String]) -> Result<(), String> {
     let mut device_mode = "mock".to_string();
     let mut config_path: Option<PathBuf> = None;
+    let mut forward: Option<PathBuf> = None;
 
     for arg in args {
         if let Some(value) = arg.strip_prefix("--device=") {
             device_mode = value.to_string();
         } else if let Some(value) = arg.strip_prefix("--config=") {
             config_path = Some(PathBuf::from(value));
+        } else if arg == "--forward" {
+            forward = Some(forward_socket_path());
+        } else if let Some(value) = arg.strip_prefix("--forward=") {
+            forward = Some(PathBuf::from(value));
         } else {
             return Err(format!("unexpected argument {arg:?}"));
         }
@@ -120,10 +126,18 @@ fn run(args: &[String]) -> Result<(), String> {
         config.environments.len(),
         config.policy.default_tier.as_str()
     );
+    if let Some(path) = &forward {
+        eprintln!("  forward     {}", path.display());
+        eprintln!(
+            "              anything reaching this socket may ask. Requests arriving on it\n\
+             \x20             are shown as forwarded, and policy rules can scope them with\n\
+             \x20             `origin = \"forwarded\"`."
+        );
+    }
     eprintln!("\nwaiting for approval requests. ctrl-c to stop.");
 
     let daemon = Daemon::new(config, device, packs, audit);
-    service::serve(daemon, &socket_path()).map_err(|e| e.to_string())
+    service::serve(daemon, &socket_path(), forward.as_deref()).map_err(|e| e.to_string())
 }
 
 fn build_device(mode: &str, run_dir: &std::path::Path) -> Result<Box<dyn Device>, String> {

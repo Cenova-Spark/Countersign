@@ -17,13 +17,16 @@ use countersign_verify::{
 };
 use signetd::audit::AuditStore;
 use signetd::config::Config;
-use signetd::daemon::{ApprovalRequest, Daemon, Origin};
+use signetd::daemon::{ApprovalRequest, Daemon, Origin, OriginKind};
 use signetd::device::{MockAction, MockBehaviour, MockDevice};
 
 const URI: &str = "postgres://app:hunter2@db.example.com/orders";
 
 /// One long-lived client, as a single Claude Code session would be.
-const ORIGIN: Origin = Origin { connection: 1 };
+const ORIGIN: Origin = Origin {
+    connection: 1,
+    kind: OriginKind::Local,
+};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("signetd-e2e-{}-{tag}", std::process::id()));
@@ -548,4 +551,44 @@ fn the_hold_is_longest_for_the_most_destructive_payload() {
         "a DROP should be held, not flicked"
     );
     assert!(seen[0].arm_delay_ms() > 0);
+}
+
+#[test]
+fn a_forwarded_request_says_so_on_the_screen_before_anything_else() {
+    // Forwarding is delegation: the request came from somewhere the operator is
+    // not sitting, and the display is the whole defence for that.
+    let (mut daemon, seen) = recording_daemon("forwarded");
+    daemon
+        .handle(&request("DROP TABLE orders"), Origin::forwarded(7))
+        .unwrap();
+
+    let seen = seen.lock().unwrap();
+    assert!(
+        seen[0].requester.starts_with("VIA FORWARDED SOCKET"),
+        "the forwarding must lead the line: {}",
+        seen[0].requester
+    );
+}
+
+#[test]
+fn a_forwarded_client_is_a_different_requester_from_a_local_one() {
+    // Even claiming the same name, over the same session — the socket it
+    // arrived on is the part it cannot choose.
+    let (mut daemon, seen) = recording_daemon("forwarded-switch");
+    daemon
+        .handle(&request("DROP TABLE a"), Origin::new(1))
+        .unwrap();
+    daemon
+        .handle(&request("DROP TABLE b"), Origin::new(1))
+        .unwrap();
+    daemon
+        .handle(&request("DROP TABLE c"), Origin::forwarded(2))
+        .unwrap();
+
+    let seen = seen.lock().unwrap();
+    assert!(!seen[1].requester_changed);
+    assert!(
+        seen[2].requester_changed,
+        "a tunnelled client must announce itself"
+    );
 }
