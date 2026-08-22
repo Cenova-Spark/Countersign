@@ -20,12 +20,13 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::daemon::{ApprovalRequest, ApprovalResponse, Daemon};
+use crate::daemon::{ApprovalRequest, ApprovalResponse, Daemon, Origin};
 
 /// Methods the control socket accepts.
 pub mod method {
@@ -115,6 +116,12 @@ pub fn serve(daemon: Daemon, path: &Path) -> std::io::Result<()> {
 
     let daemon = Arc::new(Mutex::new(daemon));
 
+    // Every accepted connection gets an id the peer cannot choose and cannot
+    // obtain from another peer. It is the only thing about a requester that
+    // this daemon can actually verify, so the continuity check keys on it
+    // rather than on anything the request claims about itself.
+    let connections = AtomicU64::new(1);
+
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(s) => s,
@@ -124,8 +131,9 @@ pub fn serve(daemon: Daemon, path: &Path) -> std::io::Result<()> {
             }
         };
         let daemon = Arc::clone(&daemon);
+        let origin = Origin::new(connections.fetch_add(1, Ordering::Relaxed));
         std::thread::spawn(move || {
-            if let Err(e) = handle_connection(stream, daemon) {
+            if let Err(e) = handle_connection(stream, daemon, origin) {
                 eprintln!("signetd: connection ended: {e}");
             }
         });
@@ -133,7 +141,11 @@ pub fn serve(daemon: Daemon, path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn handle_connection(stream: UnixStream, daemon: Arc<Mutex<Daemon>>) -> std::io::Result<()> {
+fn handle_connection(
+    stream: UnixStream,
+    daemon: Arc<Mutex<Daemon>>,
+    origin: Origin,
+) -> std::io::Result<()> {
     let reader = BufReader::new(stream.try_clone()?);
     let mut writer = stream;
 
@@ -142,14 +154,14 @@ fn handle_connection(stream: UnixStream, daemon: Arc<Mutex<Daemon>>) -> std::io:
         if line.trim().is_empty() {
             continue;
         }
-        let response = dispatch(&line, &daemon);
+        let response = dispatch(&line, &daemon, origin);
         writeln!(writer, "{}", serde_json::to_string(&response)?)?;
         writer.flush()?;
     }
     Ok(())
 }
 
-fn dispatch(line: &str, daemon: &Arc<Mutex<Daemon>>) -> Value {
+fn dispatch(line: &str, daemon: &Arc<Mutex<Daemon>>, origin: Origin) -> Value {
     let request: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(e) => return rpc_error(Value::Null, -32700, &e.to_string()),
@@ -200,7 +212,7 @@ fn dispatch(line: &str, daemon: &Arc<Mutex<Daemon>>) -> Value {
             // active request on the device at a time is a protocol requirement,
             // not a limitation. A second agent waits.
             let mut guard = daemon.lock().expect("daemon mutex");
-            match guard.handle(&request) {
+            match guard.handle(&request, origin) {
                 Ok(response) => rpc_ok(id, serde_json::to_value(response).unwrap_or(Value::Null)),
                 Err(e) => rpc_error(id, -32000, &e.to_string()),
             }

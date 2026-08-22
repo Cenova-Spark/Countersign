@@ -248,7 +248,7 @@ impl Daemon {
                 let requester_changed = self
                     .last_presented
                     .as_ref()
-                    .is_none_or(|last| last.connection != origin.connection);
+                    .map_or(true, |last| last.connection != origin.connection);
 
                 let presentation = Presentation {
                     render: self.render_lines(
@@ -427,10 +427,7 @@ impl Daemon {
 /// The claimed id and instance are exactly that — claims — so they are labelled
 /// as unverified. What is *not* a claim is that this is a different connection
 /// from the last one, and that is the part the acknowledgement is keyed on.
-fn describe_requester(
-    request: &ApprovalRequest,
-    last: &Option<LastPresented>,
-) -> String {
+fn describe_requester(request: &ApprovalRequest, last: &Option<LastPresented>) -> String {
     let claimed = if request.requester_instance.is_empty() {
         request.requester_id.clone()
     } else {

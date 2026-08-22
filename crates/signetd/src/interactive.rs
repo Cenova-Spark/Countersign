@@ -17,6 +17,15 @@
 //! So this prompt is not `[y/N]`: approving takes a deliberate word, and every
 //! other input, including the easiest one to press, dismisses. See
 //! `spec/countersign-v1.md` §5.2.
+//!
+//! # Acknowledging is a different organ
+//!
+//! When the requester changes, the device asks for an acknowledgement *first* —
+//! and on hardware that is a **button**, never the dial. Same-organ,
+//! different-direction would invite exactly the confusion this exists to
+//! prevent, in exactly the population it exists for: someone not paying full
+//! attention. A different organ cannot be confused for the dial by a hand
+//! moving on autopilot. See `spec/countersign-v1.md` §6.3.
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::time::Instant;
@@ -68,6 +77,32 @@ impl Device for InteractiveDevice {
         }
 
         let _ = writeln!(out, "{}", "─".repeat(64));
+
+        // The continuity check, before anything else. A different requester
+        // means the rhythm the operator has built is not about the thing in
+        // front of them, so the dial does not accept anything until they say
+        // they have noticed.
+        if presentation.requester_changed {
+            let _ = writeln!(out, "  ⚠ THE REQUESTER CHANGED");
+            let _ = writeln!(out, "    now asking: {}", presentation.requester);
+            let _ = writeln!(
+                out,
+                "\n    Press the acknowledge button (here: type `ack`) before this can be\n    \
+                 approved. Acknowledging is not approving and signs nothing."
+            );
+            let _ = write!(out, "  > ");
+            let _ = out.flush();
+
+            let mut ack = String::new();
+            if std::io::stdin().lock().read_line(&mut ack).is_err() || ack.trim() != "ack" {
+                let _ = writeln!(out, "  not acknowledged — dismissed, nothing signed\n");
+                return DeviceOutcome::Aborted;
+            }
+            let _ = writeln!(out, "    acknowledged.\n");
+        } else {
+            let _ = writeln!(out, "  requester     {}", presentation.requester);
+        }
+
         let _ = writeln!(
             out,
             "  Confirm the DIGEST above matches the one your client showed."
@@ -77,7 +112,12 @@ impl Device for InteractiveDevice {
         // something you do by not turning. A symmetric two-key prompt would
         // teach the wrong model of the hardware, and it would make approving
         // exactly as cheap as declining.
-        let _ = writeln!(out, "  Type `turn` to approve, or press Enter to dismiss.");
+        let _ = writeln!(
+            out,
+            "  Type `turn` to approve (a real device holds for {} ms), or press Enter to\n  \
+             dismiss.",
+            presentation.hold_ms()
+        );
         let _ = write!(out, "  > ");
         let _ = out.flush();
 

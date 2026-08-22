@@ -393,6 +393,82 @@ Auto-approve generously at low severity. Reserve the dial for things that
 genuinely warrant a person. **Approval fatigue is a security property of this
 system, not a matter of taste.**
 
+## 6.3 Requester continuity
+
+§6.2 keeps the dial rare. This keeps it *attributed*.
+
+Several requesters at once is the normal case — a terminal client, an editor
+client, a desktop client, a CI runner, a proxy. An operator working with one of
+them builds a rhythm with it. A request arriving from a *different* requester is
+a discontinuity, and it is the moment a rhythm becomes something to borrow.
+
+### 6.3.1 Identity must be bound to something the requester cannot choose
+
+`requester.id` is a claim (§2.1). Keying continuity on it would be theatre: an
+impostor names itself whatever asked last and the check never fires.
+
+A daemon MUST derive requester identity from the **transport**, not the payload.
+The reference daemon assigns an id to each accepted socket connection: a
+separate process gets a separate connection and cannot obtain another's. The
+claimed `requester.id` is displayed alongside, marked as claimed, because it is
+useful to a human and worthless as a control.
+
+A consequence for clients: **hold one connection for the life of the session.**
+A client that reconnects per call looks like a new requester every time and
+would make the operator acknowledge a change on every single approval — which
+manufactures exactly the fatigue §6.2.4 warns about.
+
+### 6.3.2 A change requires a separate acknowledgement
+
+When the requester differs from the last one a human was shown, the device MUST
+NOT accept an approval until the change has been acknowledged.
+
+**Acknowledging is not approving.** It signs nothing, produces no bundle, and
+authorizes nothing. It states only "I have noticed that something else is
+asking."
+
+### 6.3.3 The acknowledgement is a different organ
+
+The acknowledgement MUST come from a **button**. It MUST NOT be a reverse turn,
+a short turn, or any other use of the dial.
+
+Same-organ-different-gesture is tempting and wrong. The population this defends
+is someone not paying full attention — that is the entire premise — and asking
+them to distinguish two gestures on the same control is asking precisely the
+thing they are currently bad at. A different organ cannot be confused by a hand
+moving on autopilot.
+
+It also keeps §5.2 intact: the dial has exactly one meaning, so a mis-turn stays
+a no-op rather than becoming an acknowledgement that clears the way for the next
+one.
+
+### 6.3.4 Approval is a hold, not a flick
+
+The approving actuation MUST be sustained before the detent commits, and the
+duration SHOULD scale with severity. The reference daemon uses 300 ms at the low
+end and **5 s for anything destructive**.
+
+This is distinct from the arm delay in §6.2.3, and the distinction is the point:
+
+| | What it measures | What it defends |
+|---|---|---|
+| Arm delay | Elapsed time since the payload appeared | You cannot approve what you have not had time to read |
+| Hold | Continuous engagement during the actuation | You cannot approve something while reaching for something else |
+
+Elapsed time can be spent looking away. A hold cannot — your hand is on the
+device for all of it, which is awkward to do by accident and impossible to do
+absent-mindedly for five seconds.
+
+### 6.3.5 What this does not do
+
+It does not identify a human, and it does not stop a compromised requester from
+asking. Someone who has taken over a client keeps its connection and its
+rhythm, and this check will not fire.
+
+What it does is make **substitution** visible: a second thing that wants to ride
+an existing rhythm has to announce itself first, and the announcement is a
+gesture the operator cannot perform by accident.
+
 ---
 
 ## 7. Verification

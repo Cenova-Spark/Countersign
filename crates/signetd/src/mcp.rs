@@ -31,13 +31,22 @@ pub fn serve() -> std::io::Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
 
+    // One connection for the life of this bridge, not one per tool call.
+    //
+    // The daemon keys its requester-continuity check on the connection, because
+    // that is the only thing about a caller it can actually verify. Reconnecting
+    // per call would make every request look like a brand-new requester and ask
+    // the operator to acknowledge a change on every single approval — which is
+    // precisely the fatigue the check exists to avoid.
+    let mut session = Session::default();
+
     for line in stdin.lock().lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
         // Notifications get no reply; anything else does.
-        if let Some(response) = handle(&line) {
+        if let Some(response) = handle(&line, &mut session) {
             writeln!(stdout, "{}", serde_json::to_string(&response)?)?;
             stdout.flush()?;
         }
@@ -45,7 +54,28 @@ pub fn serve() -> std::io::Result<()> {
     Ok(())
 }
 
-fn handle(line: &str) -> Option<Value> {
+/// The bridge's connection to the daemon, held across calls.
+#[derive(Default)]
+pub struct Session {
+    client: Option<Client>,
+}
+
+impl Session {
+    /// The live connection, reconnecting if the daemon restarted under us.
+    fn client(&mut self) -> Result<&mut Client, ClientError> {
+        if self.client.is_none() {
+            self.client = Some(Client::connect(&socket_path())?);
+        }
+        Ok(self.client.as_mut().expect("just connected"))
+    }
+
+    /// Drop the connection so the next call reconnects.
+    fn reset(&mut self) {
+        self.client = None;
+    }
+}
+
+fn handle(line: &str, session: &mut Session) -> Option<Value> {
     let request: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(e) => return Some(error(Value::Null, -32700, &e.to_string())),
@@ -71,7 +101,7 @@ fn handle(line: &str) -> Option<Value> {
             }),
         ),
         "tools/list" => ok(id, json!({ "tools": tools() })),
-        "tools/call" => call_tool(id, &params),
+        "tools/call" => call_tool(id, &params, session),
         other => error(id, -32601, &format!("unknown method {other:?}")),
     })
 }
@@ -128,13 +158,16 @@ fn tools() -> Value {
     ])
 }
 
-fn call_tool(id: Value, params: &Value) -> Value {
+fn call_tool(id: Value, params: &Value, session: &mut Session) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-    let mut client = match Client::connect(&socket_path()) {
+    let client = match session.client() {
         Ok(c) => c,
-        Err(e) => return tool_error(id, &e.to_string()),
+        Err(e) => {
+            session.reset();
+            return tool_error(id, &e.to_string());
+        }
     };
 
     match name {
@@ -305,8 +338,11 @@ mod tests {
 
     #[test]
     fn initialize_reports_tools_and_a_protocol_version() {
-        let response =
-            handle(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#).unwrap();
+        let response = handle(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+            &mut Session::default(),
+        )
+        .unwrap();
         let result = &response["result"];
         assert_eq!(result["protocolVersion"], PROTOCOL_VERSION);
         assert!(result["capabilities"]["tools"].is_object());
@@ -317,13 +353,21 @@ mod tests {
     fn a_notification_gets_no_reply() {
         // Answering one corrupts the stream, and `notifications/initialized`
         // arrives on every single session.
-        assert!(handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+        assert!(handle(
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            &mut Session::default()
+        )
+        .is_none());
     }
 
     #[test]
     fn the_tool_list_exposes_no_way_to_approve() {
         // The load-bearing assertion in this file.
-        let response = handle(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#).unwrap();
+        let response = handle(
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            &mut Session::default(),
+        )
+        .unwrap();
         let names: Vec<&str> = response["result"]["tools"]
             .as_array()
             .unwrap()
@@ -343,7 +387,11 @@ mod tests {
 
     #[test]
     fn request_approval_declares_the_arguments_it_needs() {
-        let response = handle(r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#).unwrap();
+        let response = handle(
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#,
+            &mut Session::default(),
+        )
+        .unwrap();
         let tool = response["result"]["tools"]
             .as_array()
             .unwrap()
@@ -358,13 +406,17 @@ mod tests {
 
     #[test]
     fn an_unknown_method_is_an_error_not_a_panic() {
-        let response = handle(r#"{"jsonrpc":"2.0","id":4,"method":"nope"}"#).unwrap();
+        let response = handle(
+            r#"{"jsonrpc":"2.0","id":4,"method":"nope"}"#,
+            &mut Session::default(),
+        )
+        .unwrap();
         assert_eq!(response["error"]["code"], -32601);
     }
 
     #[test]
     fn malformed_input_answers_rather_than_hanging_the_client() {
-        let response = handle("{{{not json").unwrap();
+        let response = handle("{{{not json", &mut Session::default()).unwrap();
         assert_eq!(response["error"]["code"], -32700);
     }
 }
