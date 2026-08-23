@@ -1,0 +1,40 @@
+# The demo daemon config: one environment, one action, nothing else.
+#
+# Point signetd at it with COUNTERSIGN_CONFIG=demo/countersign.toml, or
+# --config=demo/countersign.toml. It is separate from ~/.config/countersign so
+# trying this changes nothing about a real setup.
+
+# The working tree this gate is being demonstrated in.
+#
+# Regenerate for another directory with:
+#   signetd fingerprint "file:///absolute/path/to/that/directory"
+#
+# The label is the daemon's, never the requester's — a hook that could name its
+# own environment could name a reassuring one.
+[[environment]]
+label = "countersign working tree (demo)"
+tier  = "development"
+uri_fingerprints = ["87ed968af4720a7e49a047488402d06deff8e929e3a74b93552b06c510bca416"]
+
+[policy]
+# Any directory nobody has classified is production, so the demo staying
+# harmless depends on the fingerprint above and not on this being lenient.
+default_tier = "production"
+on_no_device = "deny"
+
+# Deleting a file asks, even in a development tree, because that is the thing
+# being demonstrated. The tier still decides how much friction: development
+# floors severity at `none`, so the payload arms after 400 ms rather than 2 s.
+#
+# Naming `fs.delete` here is also what makes the `fs` namespace presentable at
+# all. Without this rule the daemon refuses the request outright rather than
+# showing it — see "why the dial stays rare" in crates/signetd/README.md.
+[[policy.rule]]
+tier = "development"
+actions = ["fs.delete"]
+decision = "require_approval"
+
+# There is deliberately no rule for creating files, and the hook never asks
+# about one. Note that presentability is namespace-level: `fs.delete` above
+# makes the whole `fs` namespace presentable, so if you add a second fs verb
+# later, give it its own rule and decide about it on purpose.

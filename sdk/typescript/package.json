@@ -1,0 +1,18 @@
+{
+  "name": "@countersign/sdk",
+  "version": "0.1.0",
+  "description": "Verify Countersign approvals, and request them. No dependencies.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src", "README.md"],
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "keywords": ["countersign", "signet", "approval", "hardware", "audit"]
+}

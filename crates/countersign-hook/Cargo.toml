@@ -1,0 +1,20 @@
+[package]
+name = "countersign-hook"
+description = "A Claude Code PreToolUse gate: no file is deleted without a countersignature."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "countersign-hook"
+path = "src/main.rs"
+
+[dependencies]
+countersign-verify = { path = "../countersign-verify", version = "0.1.0" }
+signetd = { path = "../signetd", version = "0.1.0" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+p256 = { version = "0.14.0-rc.10", default-features = false, features = ["ecdsa", "alloc"] }
+sha2 = { workspace = true }

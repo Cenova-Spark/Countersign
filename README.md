@@ -88,6 +88,8 @@ SQL is. All database intelligence lives in an optional pack, which is why
 | [`countersign-audit`](crates/countersign-audit) | Hash-chained audit trails that export without disclosing a single query. |
 | [`signetd`](crates/signetd) | **The daemon.** Owns the device, classifies environments, enforces policy, and writes the trail — plus the stdio MCP bridge Claude Code spawns. |
 | [`countersign-proxy`](crates/countersign-proxy) | **Posture C.** A PostgreSQL wire proxy that refuses statements nobody countersigned. No agent integration at all. |
+| [`countersign-hook`](crates/countersign-hook) | A Claude Code `PreToolUse` gate. Deleting a file takes a countersignature; creating one takes nothing. How to try the protocol without a database. |
+| [`sdk/typescript`](sdk/typescript) | Verify approvals and request them, from Node. Zero dependencies, no build step, checked against the same vectors as Rust. |
 
 Specs live in [`spec/`](spec/), with machine-readable test vectors in
 [`spec/vectors/`](spec/vectors/) — including a **published** test keypair whose
@@ -102,8 +104,9 @@ Try it end to end, with no hardware, in two terminals — see
 
 ### What is not here yet
 
-The SDKs, the cloud-agent relay, and the firmware. See
-[Build order](#build-order).
+Client integrations, the cloud-agent relay, and the firmware. Everything still
+outstanding — including what the offline build constrained — is in
+[NEXT_STEPS.md](NEXT_STEPS.md).
 
 Some of that is blocked by this workspace having been built offline; those items
 and the versions to revisit are in [`BLOCKED.md`](BLOCKED.md).
@@ -232,7 +235,7 @@ cable.
 6. ~~SSH socket forwarding — cheap, and the difference between "works on my
    laptop" and "works how engineers actually operate"~~ ✅
 7. ~~Reference Postgres proxy — the coverage story, and the first posture-C artifact~~ ✅
-8. TS SDK + local HTTP/WS
+8. ~~TS SDK~~ ✅ · local HTTP/WS
 9. Client integrations at whichever execution chokepoint each one has
 10. Relay for cloud agents
 11. Swap mock for hardware

@@ -67,6 +67,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "countersign-hook"
+version = "0.1.0"
+dependencies = [
+ "countersign-verify",
+ "p256",
+ "serde",
+ "serde_json",
+ "sha2",
+ "signetd",
+]
+
+[[package]]
 name = "countersign-pack"
 version = "0.1.0"
 dependencies = [
