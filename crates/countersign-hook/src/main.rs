@@ -25,7 +25,7 @@ fn main() -> ExitCode {
     }
 
     let config = match parse(&args) {
-        Ok(Parsed::Explain(command, _)) => {
+        Ok(Parsed::Explain(command)) => {
             explain(&command);
             return ExitCode::SUCCESS;
         }
@@ -67,7 +67,7 @@ fn main() -> ExitCode {
 
 enum Parsed {
     Gate(Config),
-    Explain(String, ()),
+    Explain(String),
 }
 
 fn parse(args: &[String]) -> Result<Parsed, String> {
@@ -101,7 +101,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     }
 
     if let Some(command) = explain {
-        return Ok(Parsed::Explain(command, ()));
+        return Ok(Parsed::Explain(command));
     }
 
     Ok(Parsed::Gate(Config {

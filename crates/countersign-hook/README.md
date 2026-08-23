@@ -36,9 +36,9 @@ cargo build --workspace
 ./target/debug/signetd run --config=demo/countersign.toml
 ```
 
-**Terminal 2 — register the hook and restart Claude Code:**
+**Terminal 2 — install the hook and restart Claude Code.**
 
-`.claude/settings.json` in this repository already does this:
+Put this in `.claude/settings.local.json`:
 
 ```json
 {
@@ -49,7 +49,7 @@ cargo build --workspace
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/target/debug/countersign-hook --accept-test-keys --deadline-ms 90000",
+            "command": ""$CLAUDE_PROJECT_DIR"/target/debug/countersign-hook --accept-test-keys --deadline-ms 90000",
             "timeout": 120
           }
         ]
@@ -62,6 +62,21 @@ cargo build --workspace
 Hooks are read when a session starts, so restart Claude Code after editing it.
 That is a safety property rather than an inconvenience: an agent that could
 install a hook mid-session could install one that approves things.
+
+### Why this is not checked in
+
+It would be one line in `.claude/settings.json` to make every clone of this
+repository arrive with the gate already on. That is the wrong default, for the
+same reason the gate is worth having at all.
+
+This hook fails closed. Someone who clones the repository to read the spec, and
+who has never started `signetd`, would find every `rm` in the tree refused by a
+protocol they have not agreed to yet — and their first impression of
+Countersign would be software that took something away. Installing an
+enforcement point is a decision, and a decision has to be made by someone.
+
+So it stays opt-in, and it stays local: the file is `settings.local.json`
+because the path is yours and the choice is yours.
 
 Then ask for the two halves of the demo:
 

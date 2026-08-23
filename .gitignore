@@ -1,3 +1,6 @@
 /target
 **/*.rs.bk
 .DS_Store
+
+# The file-delete gate is opt-in. See crates/countersign-hook/README.md.
+.claude/settings.local.json

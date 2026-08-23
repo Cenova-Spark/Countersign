@@ -155,6 +155,21 @@ unspecified. A factory certificate proving a key lives in genuine hardware is a
 *different claim* from "this device belongs to Alice" and must not be conflated
 with it. Out of scope until hardware exists.
 
+**Requester continuity across short-lived clients.** The device asks for an
+acknowledgement when the requester changes, and `signetd` keys that on the
+control-socket connection — the one thing about a caller it can actually verify.
+The MCP bridge holds one connection per session, so the check means what it
+says. `countersign-hook` is a fresh process per tool call, so the check reads
+"changed" every single time and the operator types `ack` before every `turn`,
+which drains the acknowledgement of the information it exists to carry. This
+applies to every per-invocation enforcement point: a hook, a CLI, a cron job.
+
+The three candidates are in `crates/countersign-hook/README.md`. The one worth
+noting here is that the obvious fix — key continuity on the claimed requester id
+instead — is the wrong one: a check keyed on a claim is defeated by making the
+claim. Verified peer credentials plus a registered session is the only option
+that keeps the acknowledgement honest, and it is the most machinery.
+
 **Windows.** `signetd::service` uses `std::os::unix::net` and
 `signetd::interactive` assumes a POSIX terminal. Named pipes and a different
 console path. No work done.
