@@ -36,6 +36,7 @@ fn run() -> Result<(), String> {
     let mut target: Option<String> = None;
     let mut socket = signetd::service::socket_path();
     let mut accept_test_keys = false;
+    let mut state_dir = signetd::config::config_dir().join("proxy-state");
 
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -49,6 +50,7 @@ fn run() -> Result<(), String> {
             "--upstream" => upstream = value("--upstream")?,
             "--target" => target = Some(value("--target")?),
             "--socket" => socket = PathBuf::from(value("--socket")?),
+            "--state-dir" => state_dir = PathBuf::from(value("--state-dir")?),
             "--accept-test-keys" => accept_test_keys = true,
             other => return Err(format!("unexpected argument {other:?}; try --help")),
         }
@@ -65,6 +67,7 @@ fn run() -> Result<(), String> {
         target_uri,
         socket,
         accept_test_keys,
+        state_dir,
     })
     .map_err(|e| e.to_string())
 }
@@ -81,6 +84,7 @@ fn print_help() {
          \x20 --upstream ADDR        the real database  (default 127.0.0.1:5432)\n\
          \x20 --target URI           what clients believe they are reaching (required)\n\
          \x20 --socket PATH          signetd control socket\n\
+         \x20 --state-dir PATH       where the replay defence is kept across restarts\n\
          \x20 --accept-test-keys     accept PUBLISHED TEST KEY signatures (demos only)\n\
          \n\
          There is no TLS between client and proxy: an SSLRequest is answered 'N'\n\

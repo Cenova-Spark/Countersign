@@ -54,6 +54,11 @@ fn start_proxy(upstream: &Upstream, socket: &str) -> String {
         target_uri: "postgres://app@db.example.com/orders".into(),
         socket: socket.into(),
         accept_test_keys: true,
+        state_dir: std::env::temp_dir().join(format!(
+            "cs-px-state-{}-{}",
+            std::process::id(),
+            addr.replace(['.', ':'], "-")
+        )),
     };
     std::thread::spawn(move || {
         let _ = serve_on(listener, config);
@@ -446,4 +451,83 @@ fn the_approval_is_verified_against_the_statement_being_forwarded() {
     );
     assert!(seen.contains("DELETE FROM orders WHERE id = 3"), "{seen:?}");
     let _ = std::fs::remove_file(&socket);
+}
+
+#[test]
+fn the_replay_defence_survives_a_proxy_restart() {
+    // The reason the store is on disk. A proxy that forgot the highest counter
+    // it had seen would accept a replayed approval once per restart, and
+    // restarting a proxy is not a sophisticated attack.
+    use countersign_verify::{CounterStore, FileStore};
+
+    let socket = start_daemon("durable", APPROVE_SQL);
+    let upstream = stub_upstream();
+
+    let state_dir = std::env::temp_dir().join(format!("cs-px-durable-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&state_dir);
+
+    // A proxy, one approved statement, then the proxy goes away.
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let config = Config {
+            listen: addr.clone(),
+            upstream: upstream.addr.clone(),
+            target_uri: TARGET.into(),
+            socket: socket.clone().into(),
+            accept_test_keys: true,
+            state_dir: state_dir.clone(),
+        };
+        std::thread::spawn(move || {
+            let _ = serve_on(listener, config);
+        });
+        settle();
+
+        let mut client = connect(&addr);
+        client
+            .write_all(&simple_query("DELETE FROM orders WHERE id = 9"))
+            .unwrap();
+        client.flush().unwrap();
+        settle();
+        assert!(
+            upstream_text(&upstream).contains("id = 9"),
+            "the statement was approved"
+        );
+    }
+
+    // What a fresh proxy reads on the way up.
+    let reloaded = FileStore::open(state_dir.join("counters.json")).unwrap();
+    assert!(
+        !reloaded.is_empty(),
+        "the counter must have been written to disk"
+    );
+
+    let device = "d2eed8cf599a13c5cc39434b64307a75431fc6b95eb7ceeee7ecb94e40023f1a";
+    let highest = CounterStore::highest(&reloaded, device);
+    assert!(
+        highest.is_some_and(|c| c > 0),
+        "a restarted proxy must remember the device's counter, got {highest:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&state_dir);
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[test]
+fn a_proxy_refuses_to_start_on_an_unreadable_replay_history() {
+    // Starting with an empty history would silently reopen the replay window
+    // that the file exists to close.
+    use countersign_verify::FileStore;
+
+    let dir = std::env::temp_dir().join(format!("cs-px-corrupt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("counters.json"), "{ truncated").unwrap();
+
+    assert!(
+        FileStore::open(dir.join("counters.json")).is_err(),
+        "a corrupt history must stop the proxy, not be quietly discarded"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

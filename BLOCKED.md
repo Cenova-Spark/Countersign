@@ -66,7 +66,18 @@ something the bridge should support — resources, prompts, or a transport chang
 a POSIX terminal. Windows needs named pipes and a different console path. No
 work has been done here.
 
-## 6. Not yet verified against a released registry
+## 6. Replay state is single-writer
+
+`countersign-verify::FileStore` is durable and crash-safe (atomic rename, fsync
+before it), but it assumes one process writes one file. Two verifiers sharing a
+state directory would race, and nothing currently detects that.
+
+Advisory file locking would catch it, at the cost of stale-lock recovery after a
+crash. A shared backend — Redis, Postgres — is the answer at any real scale.
+Neither is worth building until something actually runs two verifiers against one
+history.
+
+## 7. Not yet verified against a released registry
 
 `Cargo.lock` was resolved entirely from cache. Once online, run a clean
 `cargo update` + `cargo test --workspace` on a fresh checkout to confirm nothing

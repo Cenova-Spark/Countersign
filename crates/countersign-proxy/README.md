@@ -75,6 +75,23 @@ In the extended protocol a refusal is followed by discarding messages until
 `Sync`, then reporting ready — imitating what the real server does, because a
 client that never gets a reply waits forever.
 
+## The replay defence is on disk
+
+Device counters are written to `--state-dir` (default
+`~/.config/countersign/proxy-state`) and reloaded on start. A proxy that forgot
+the highest counter it had seen would accept a replayed approval once per
+restart, and restarting a proxy is not a sophisticated attack.
+
+Two properties worth knowing:
+
+- **A write that cannot land is a refusal.** If the counter cannot be persisted,
+  verification fails and the statement is not forwarded. Accepting an approval
+  you cannot remember is strictly worse than refusing it, so a full disk
+  produces friction rather than a silent replay window.
+- **An unreadable history stops the proxy.** A corrupt file is not discarded and
+  replaced with an empty one — that would quietly reopen the window the file
+  exists to close. Inspect it rather than deleting it.
+
 ## Failure is closed
 
 No daemon reachable means nothing can be approved, so nothing is forwarded. A
@@ -87,10 +104,10 @@ defeated by stopping the daemon, which is not a sophisticated attack.
   client falls back to plaintext. Run it on loopback or inside a tunnel until
   that changes.
 - **PostgreSQL only.** MySQL and MongoDB are the same shape and not written yet.
-- **In-memory replay state.** Every request carries a fresh nonce so no two
-  digests match, which makes replay within a session impossible. A durable
-  counter store belongs here once approvals start arriving from somewhere other
-  than the local daemon.
+- **Single-writer replay state.** The counter store is durable and shared
+  across sessions (`--state-dir`), but it is one process writing one file. Two
+  proxies sharing a state directory would race; give them one each, or wait for
+  a shared backend.
 - **The registry is the published test key.** A real deployment loads a signed
   roster and trusts one authority key configured out of band — see
   [`spec/enrollment-v1.md`](../../spec/enrollment-v1.md).

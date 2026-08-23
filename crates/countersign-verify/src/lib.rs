@@ -66,6 +66,7 @@ pub mod encoding;
 pub mod enrollment;
 pub mod jcs;
 pub mod request;
+pub mod store;
 pub mod verify;
 
 pub use bundle::{ApprovalEnvelope, Bundle, Decision, DeviceSignature};
@@ -78,6 +79,7 @@ pub use request::{
     digest_display, digest_of_json, digest_of_value, fingerprint_uri, normalize_uri, Request,
     Requester, Target, VERSION,
 };
+pub use store::{FileStore, StoreError};
 pub use verify::{
     is_low_s, signing_payload, verify_bundle, verify_for_execution, verify_signatures, Acceptance,
     CounterStore, EnrolledDevice, Execution, MemoryCounters, NoCounterStore, Registry,

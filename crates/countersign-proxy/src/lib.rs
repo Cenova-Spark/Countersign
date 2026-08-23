@@ -33,7 +33,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
 use countersign_verify::{
-    fingerprint_uri, verify_for_execution, Decision, EnrolledDevice, Execution, MemoryCounters,
+    fingerprint_uri, verify_for_execution, Decision, EnrolledDevice, Execution, FileStore,
     Registry, RustCryptoBackend, VerifyPolicy,
 };
 use signetd::daemon::ApprovalRequest;
@@ -59,6 +59,12 @@ pub struct Config {
     /// False in anything real. True is how a demo works at all, and it is why
     /// the flag is named after the thing it lets in.
     pub accept_test_keys: bool,
+    /// Where the replay defence is kept between restarts.
+    ///
+    /// Durable on purpose. A proxy that forgot the highest counter it had seen
+    /// would accept a replayed approval once per restart, and restarting a
+    /// proxy is not a sophisticated attack.
+    pub state_dir: std::path::PathBuf,
 }
 
 /// Run the proxy until the process is killed.
@@ -88,6 +94,19 @@ pub fn serve_on(listener: TcpListener, config: Config) -> std::io::Result<()> {
     }
     eprintln!("\nready. statements needing approval will block until a human acts.");
 
+    // One store for the whole proxy, not one per connection: a counter accepted
+    // on one client's session must be refused on another's, which is the entire
+    // point of tracking it.
+    let counters = Arc::new(Mutex::new(
+        FileStore::open(config.state_dir.join("counters.json"))
+            .map_err(|e| std::io::Error::other(e.to_string()))?,
+    ));
+    eprintln!(
+        "  replay state {} ({} device(s) remembered)",
+        config.state_dir.join("counters.json").display(),
+        counters.lock().expect("counters").len()
+    );
+
     let config = Arc::new(config);
     let fingerprint = Arc::new(fingerprint);
 
@@ -101,8 +120,9 @@ pub fn serve_on(listener: TcpListener, config: Config) -> std::io::Result<()> {
         };
         let config = Arc::clone(&config);
         let fingerprint = Arc::clone(&fingerprint);
+        let counters = Arc::clone(&counters);
         std::thread::spawn(move || {
-            if let Err(e) = handle_client(stream, &config, &fingerprint) {
+            if let Err(e) = handle_client(stream, &config, &fingerprint, counters) {
                 eprintln!("proxy: session ended: {e}");
             }
         });
@@ -110,7 +130,12 @@ pub fn serve_on(listener: TcpListener, config: Config) -> std::io::Result<()> {
     Ok(())
 }
 
-fn handle_client(client: TcpStream, config: &Config, fingerprint: &str) -> std::io::Result<()> {
+fn handle_client(
+    client: TcpStream,
+    config: &Config,
+    fingerprint: &str,
+    counters: Arc<Mutex<FileStore>>,
+) -> std::io::Result<()> {
     client.set_nodelay(true)?;
     let mut client_reader = BufReader::new(client.try_clone()?);
 
@@ -159,7 +184,7 @@ fn handle_client(client: TcpStream, config: &Config, fingerprint: &str) -> std::
         });
     }
 
-    let mut session = Session::new(config, fingerprint);
+    let mut session = Session::new(config, fingerprint, counters);
     let mut to_server = upstream;
 
     while let Some(message) = pg::read_message(&mut client_reader)? {
@@ -226,15 +251,17 @@ struct Session<'a> {
     /// True between refusing an extended-protocol message and its `Sync`.
     discarding: bool,
     registry: Registry,
+    counters: Arc<Mutex<FileStore>>,
 }
 
 impl<'a> Session<'a> {
-    fn new(config: &'a Config, fingerprint: &'a str) -> Self {
+    fn new(config: &'a Config, fingerprint: &'a str, counters: Arc<Mutex<FileStore>>) -> Self {
         Self {
             config,
             fingerprint,
             discarding: false,
             registry: Registry::new(),
+            counters,
         }
     }
 
@@ -310,10 +337,11 @@ impl<'a> Session<'a> {
                 accept_test_keys: self.config.accept_test_keys,
                 ..Default::default()
             },
-            // Replay within a session is already impossible — every request
-            // carries a fresh nonce, so no two digests match. A durable store
-            // belongs here when approvals start arriving from elsewhere.
-            &mut MemoryCounters::new(),
+            // Durable and shared across every session. A fresh nonce per
+            // request already makes two digests differ, but that only holds
+            // while approvals originate here; the counter is what survives an
+            // approval arriving from somewhere else, and a restart.
+            &mut *self.counters.lock().expect("counters"),
             &RustCryptoBackend,
             None,
         ) {

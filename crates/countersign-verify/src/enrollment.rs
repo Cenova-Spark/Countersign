@@ -43,6 +43,7 @@ use sha2::{Digest, Sha256};
 use crate::bundle::{ApprovalEnvelope, Decision};
 use crate::encoding::{b64url_decode, hex_decode, hex_encode};
 use crate::request::digest_of_json;
+use crate::store::StoreError;
 use crate::verify::{is_low_s, signing_payload, SignatureBackend};
 
 /// The reserved action a device countersigns to prove it holds its own key.
@@ -410,7 +411,14 @@ impl SignedRoster {
 /// needs the verifier to keep reading a roster from before it was removed.
 pub trait RosterStore {
     fn highest_serial(&self, authority_id: &str) -> Option<u64>;
-    fn record_serial(&mut self, authority_id: &str, serial: u64);
+
+    /// Remember this serial, durably.
+    ///
+    /// Fallible for the same reason `CounterStore::record` is: a serial that
+    /// cannot be persisted is a rollback that will not be detected after the
+    /// next restart, and every revocation between then and now quietly comes
+    /// back.
+    fn record_serial(&mut self, authority_id: &str, serial: u64) -> Result<(), StoreError>;
 }
 
 /// An in-memory [`RosterStore`]. A verifier that restarts needs a durable one,
@@ -428,9 +436,10 @@ impl RosterStore for MemoryRosterStore {
     fn highest_serial(&self, authority_id: &str) -> Option<u64> {
         self.0.get(authority_id).copied()
     }
-    fn record_serial(&mut self, authority_id: &str, serial: u64) {
+    fn record_serial(&mut self, authority_id: &str, serial: u64) -> Result<(), StoreError> {
         let e = self.0.entry(authority_id.to_string()).or_insert(serial);
         *e = (*e).max(serial);
+        Ok(())
     }
 }
 
@@ -452,7 +461,11 @@ pub fn accept_roster(
         }
     }
 
-    store.record_serial(&roster.authority_id, roster.serial);
+    // Persisted before the roster is handed back, so a caller cannot act on a
+    // roster whose serial was never recorded.
+    store
+        .record_serial(&roster.authority_id, roster.serial)
+        .map_err(EnrollmentError::Store)?;
     Ok(roster)
 }
 
@@ -487,6 +500,8 @@ pub enum EnrollmentError {
         serial: u64,
         highest: u64,
     },
+    /// The rollback defence could not be persisted, so the roster was refused.
+    Store(StoreError),
 }
 
 impl std::fmt::Display for EnrollmentError {
@@ -526,6 +541,11 @@ impl std::fmt::Display for EnrollmentError {
             }
             RosterBadSignature => f.write_str("roster signature did not verify"),
             RosterNotLowS => f.write_str("roster signature is not low-S"),
+            Store(e) => write!(
+                f,
+                "refused: the roster serial could not be recorded ({e}). A serial that cannot \
+                 be remembered is a rollback that will not be detected"
+            ),
             RosterRollback { serial, highest } => write!(
                 f,
                 "roster serial {serial} is older than the highest accepted ({highest}) — \

@@ -18,6 +18,7 @@ use crate::encoding::{b64url_decode, hex_encode, EncodingError};
 use crate::enrollment::{DeviceStatus, EnrollmentError, EnrollmentRecord, Operator, Roster};
 use crate::jcs::JcsError;
 use crate::request::digest_of_json;
+use crate::store::StoreError;
 
 /// The domain separator prefixed to every signed payload, so a Countersign
 /// signature can never be replayed as a signature over some other protocol's
@@ -296,7 +297,15 @@ impl Default for VerifyPolicy {
 /// Per-device high-water marks for the monotonic counter.
 pub trait CounterStore {
     fn highest(&self, device_id: &str) -> Option<u64>;
-    fn record(&mut self, device_id: &str, counter: u64);
+
+    /// Remember that `counter` has been used, durably enough that a restart
+    /// will not forget it.
+    ///
+    /// Returns a `Result`, and verification **fails** when it errors. That is
+    /// deliberate: accepting an approval you cannot remember is strictly worse
+    /// than refusing it, so a full disk must produce a refusal rather than a
+    /// silent replay window.
+    fn record(&mut self, device_id: &str, counter: u64) -> Result<(), StoreError>;
 }
 
 /// An in-memory [`CounterStore`].
@@ -317,9 +326,10 @@ impl CounterStore for MemoryCounters {
     fn highest(&self, device_id: &str) -> Option<u64> {
         self.0.get(device_id).copied()
     }
-    fn record(&mut self, device_id: &str, counter: u64) {
+    fn record(&mut self, device_id: &str, counter: u64) -> Result<(), StoreError> {
         let e = self.0.entry(device_id.to_string()).or_insert(counter);
         *e = (*e).max(counter);
+        Ok(())
     }
 }
 
@@ -335,7 +345,9 @@ impl CounterStore for NoCounterStore {
     fn highest(&self, _: &str) -> Option<u64> {
         None
     }
-    fn record(&mut self, _: &str, _: u64) {}
+    fn record(&mut self, _: &str, _: u64) -> Result<(), StoreError> {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +416,8 @@ pub enum VerifyError {
     DuplicateDevice(String),
     Encoding(EncodingError),
     Jcs(JcsError),
+    /// The replay defence could not be persisted, so the approval was refused.
+    Store(StoreError),
     Malformed(String),
 }
 
@@ -466,6 +480,11 @@ impl std::fmt::Display for VerifyError {
             DuplicateDevice(id) => write!(f, "device {id} signed more than once"),
             Encoding(e) => write!(f, "{e}"),
             Jcs(e) => write!(f, "{e}"),
+            Store(e) => write!(
+                f,
+                "refused: the replay defence could not be recorded ({e}). An approval that \
+                 cannot be remembered could be replayed after a restart"
+            ),
             Malformed(m) => write!(f, "malformed: {m}"),
         }
     }
@@ -747,8 +766,14 @@ pub fn verify_signatures(
 
     // Only record once everything has passed, so a rejected bundle cannot burn
     // a counter value and lock out the approval that follows it.
+    //
+    // And if the record cannot be made durable, this fails. An approval we
+    // could not remember is one that could be replayed after the next restart,
+    // so the correct answer to a failing disk is a refusal.
     for sig in bundle_signatures {
-        counters.record(&sig.device_id, sig.counter);
+        counters
+            .record(&sig.device_id, sig.counter)
+            .map_err(VerifyError::Store)?;
     }
 
     Ok(Verified {
@@ -1019,6 +1044,42 @@ mod tests {
             None
         )
         .is_ok());
+    }
+
+    #[test]
+    fn an_approval_whose_counter_cannot_be_persisted_is_refused() {
+        // The failure a fallible `record` exists to surface. Without it a full
+        // disk would return Ok for an approval nothing could remember, opening
+        // a replay window that lasts until the next restart.
+        struct FailingStore;
+        impl CounterStore for FailingStore {
+            fn highest(&self, _: &str) -> Option<u64> {
+                None
+            }
+            fn record(&mut self, _: &str, _: u64) -> Result<(), StoreError> {
+                Err(StoreError::Io(
+                    "/counters".into(),
+                    "no space left on device".into(),
+                ))
+            }
+        }
+
+        let d = device(1);
+        let err = verify_bundle(
+            &envelope(vec![sig_for(&d, 5)]),
+            &registry_with(&[&d]),
+            &VerifyPolicy::default(),
+            &mut FailingStore,
+            &AlwaysValid,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, VerifyError::Store(_)), "got {err:?}");
+        assert!(
+            err.to_string().contains("could be replayed"),
+            "the message should say why this is a refusal: {err}"
+        );
     }
 
     #[test]
