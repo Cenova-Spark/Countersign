@@ -6,9 +6,9 @@ Sections 1–3 are work. Section 4 is the tail of decisions that were deferred
 rather than made. Section 5 is what the offline build constrained — none of it
 is a design decision, all of it is a constraint to re-examine with a network.
 
-**Status:** 350 Rust tests, 23 TypeScript tests, clippy clean. Build-order
-steps 1–8 of 11 are done. Hardware is at Phase 0, and nothing below is blocked
-on it except where it says so.
+**Status:** 356 Rust tests, 23 TypeScript tests, 16 web tests, clippy clean.
+Build-order steps 1–8 are done, and step 10 is half done — see §2.2. Hardware is
+at Phase 0, and nothing below is blocked on it except where it says so.
 
 ---
 
@@ -70,21 +70,48 @@ MongoDB are the same shape: frame the wire, find the statement, authorize,
 refuse politely in the protocol's own vocabulary.
 
 MySQL is the obvious second — `COM_QUERY` and `COM_STMT_PREPARE` map cleanly
-onto `Query` and `Parse`.
+onto `Query` and `Parse`. Browser automation is the same shape and a harder
+question about what gets rendered; it has its own section at §2.5.
 
-### 2.2 The cloud-agent relay
+### 2.2 The relay
 
-Build-order step 10, for agents with no local presence.
+Build-order step 10. Half of it exists — see [`web`](web).
 
-- Agent POSTs a request, gets an id. The user's `signetd` holds a long-lived WS
-  subscription filtered to that user. Signature returns via the relay.
-- **The relay must be untrusted by design.** It holds no key and can forge
-  nothing. Consider end-to-end encrypting the payload so it sees only ciphertext
-  plus a digest — that makes a hosted relay a service you can run without
-  becoming a custodian of anyone's queries.
-- This is the one piece that wants to be a hosted service, and therefore the one
-  with a business model attached. It is also the one most likely to attract
-  requests for the things in spec §9. Hold that line.
+**Built: the human-away-from-the-desk direction.** `signetd --device=relay`
+presents to a hosted relay and blocks; the person answers on a phone with the
+same payload, the same digest and the same hold; the daemon verifies the
+signature itself before it believes any of it. The relay holds no key, and the
+phone recomputes the digest from the request's own bytes and refuses to render
+anything that disagrees, so a relay that rewrote a payload cannot get a
+signature over the rewrite.
+
+Signing is with a **second published test key**, so nothing on this path is a
+production-valid approval and no verifier accepts one by default.
+
+**Not built, and the harder half — the cloud-agent direction.** An agent with no
+local presence POSTs a request and gets an id; the user's `signetd` holds a
+subscription filtered to that user; the signature returns via the relay. Today
+`signetd` is the one that starts every conversation, which is what makes the
+relay a plain HTTP client and needs no inbound anything.
+
+Still outstanding on what does exist:
+
+- **The payload is not end-to-end encrypted.** The relay can read a statement.
+  It cannot change one, which is the property that mattered most, but a hosted
+  relay is currently a custodian of queries and should not have to be. Encrypt
+  to the phone's key and the relay sees ciphertext plus a digest.
+- **Long-polling, not WebSocket.** Serverless functions cannot hold a socket, so
+  the daemon polls a call that holds for ~9 s. Fine for a demo, and the wrong
+  shape for a fleet.
+- **The relay trusts its own pairing table for `device_id`.** It should learn
+  keys from a signed roster like everything else — the same gap as §3's note
+  about the proxy's hardcoded registry, and the same fix.
+- **The dev store is in process memory.** It exists so the loop can be run on
+  one machine without an account, behind two locks. It is not a smaller Redis.
+
+This is still the one piece that wants to be a hosted service, and therefore the
+one with a business model attached. It is also the one most likely to attract
+requests for the things in spec §9. Hold that line.
 
 ### 2.3 Go port of the verifier
 
@@ -101,12 +128,81 @@ Rust code.
 - Implement `signetd::device::Device`; `MockDevice` is the reference shape.
 - Reconnect-on-unplug and device-state push are not written.
 - **Firmware obligations that are specced and untested:** low-S normalization on
-  the signing path (§4), the arm delay and its restart-on-new-payload (§6.2.3),
-  the sustained hold (§6.3.4), the acknowledge button (§6.3.3), and the rule
-  that a button can never carry an approval (§8).
+  the signing path (§4), the `device_id` derivation including the `0x04` prefix
+  a secure element omits (§4.2), the arm delay and its restart-on-new-payload
+  (§6.2.3), the rest transition after render (§6.2.3), the sustained hold
+  measured from that transition (§6.3.4), the acknowledge button (§6.3.3), and
+  the rule that a button can never carry an approval (§8).
 - Then `countersign doctor`: round-trip latency, dial angle telemetry, render
   timing, counter continuity. The tool that answers "is it the software or the
   hardware".
+
+### 2.5 A proxy for browser automation
+
+The browser is the one surface with no chokepoint at all. A hook covers an agent
+harness, the proxy covers a database, and an agent driving a browser is neither:
+it never speaks to the daemon and it never speaks Postgres. Nothing here sits in
+front of it, and a browser appears in this repository only on the *approving*
+side, in [`web`](web).
+
+The way in is the one §2.1 already describes, because browser automation **is** a
+wire protocol. Chrome DevTools Protocol is JSON-RPC over a WebSocket, WebDriver
+is JSON over HTTP, and Playwright has its own channel. Frame the wire, find the
+action, authorize, refuse in the protocol's own vocabulary. Puppeteer,
+Playwright, Selenium and every agent that drives a headless Chrome go through one
+of them with no integration by any of them — the same argument that picked a
+proxy over client integrations for databases.
+
+**The hard part is not the framing, it is what the human reads.** Postgres hands
+the proxy a statement that *is* the action, and `countersign-db` turns it into
+something worth rendering. CDP hands it `Input.dispatchMouseEvent` at a
+coordinate, which is a click on a pixel and means nothing on a screen. The unit
+that can be rendered is not the unit that arrives on the wire, and designing that
+mapping is the work.
+
+The methods that carry a consequence, and are few enough to gate without training
+someone to hold the dial without reading:
+
+| CDP surface | Action | Why |
+|---|---|---|
+| `Page.navigate`, `Page.navigateToHistoryEntry` | `browser.navigate` | The destination origin is the blast radius |
+| `Runtime.evaluate`, `Runtime.callFunctionOn`, `Page.addScriptToEvaluateOnNewDocument` | `browser.evaluate` | Arbitrary script inside an authenticated session. The highest severity a pack can raise to |
+| `Network.getAllCookies`, `Storage.getCookies` | `browser.credentials` | A session cookie read is an exfiltrated login |
+| `Fetch.*`, `Network.setExtraHTTPHeaders` | `browser.intercept` | Rewriting requests inside a session a human authenticated |
+| `Browser.setDownloadBehavior`, `Page.setDownloadBehavior` | `browser.download` | Writes that land outside the browser |
+
+Clicks, typing and scrolling are deliberately **not** on that list. A gate on
+every input frame produces hundreds of prompts an hour, and someone who has held
+the dial two hundred times is not reading the two hundred and first. That is the
+failure the non-goals exist to prevent, reached from the other end.
+
+So the shape is `countersign-web`, a pack mapping a method and its parameters
+onto a statement and a severity, plus a proxy that speaks the debugging port. The
+daemon learns nothing about CDP, which is the whole reason packs are a protocol
+(`spec/pack-protocol-v1.md` §1).
+
+**How much of a posture this is.** Genuine C for an automated browser, on one
+condition: the real debugging port is reachable only by the proxy and the agent
+cannot start a browser of its own with a fresh one. That is the same condition
+the database proxy already has — it is posture C because there is no route around
+it — and it is easier to state than to hold on a laptop where an agent with a
+shell can launch Chrome however it likes. Write that in the README rather than
+implying otherwise.
+
+**What it does not reach**, and must not be sold as reaching:
+
+- A human's own browsing. Not the threat model, and never was.
+- An agent running *inside* the browser as an extension. It is not on the far
+  side of any wire, it is in the process — posture B at best, and only for what
+  the extension itself routes through a gate.
+- An agent on a remote service acting through its own browser. Nothing local is
+  in that path at all. That is §2.2's cloud-agent direction, and no proxy on this
+  machine substitutes for it.
+
+Order: after MySQL in §2.1. MySQL proves the proxy generalizes across protocols
+of the same shape; this one asks the harder question of what a renderable action
+is when the wire does not hand you one, and the answer is reusable for every
+non-statement protocol after it.
 
 ---
 
@@ -126,9 +222,17 @@ Rust code.
   `signetd enrol --subject alice@example.com` is the missing piece, and without
   it the trust root is theory.
 - **The proxy's registry is hardcoded to the test key.** It should load a signed
-  roster and trust one authority key configured out of band.
-- **`SignedRoster` cannot be signed by a Signet.** Spec §4.2 calls that the
-  natural end state; it needs a small format addition (carry an
+  roster and trust one authority key configured out of band. `countersign-hook`
+  has the same shape and now compiles in *two* test keys — the mock's and the
+  remote one — which makes the smell harder to ignore.
+- **A remote approval is a weaker claim, and the spec does not say so.** The
+  phone is a second device class: a general-purpose OS, no screen the requesting
+  software cannot reach. It signs with a published test key so nothing turns on
+  it today, but the moment an enclave-backed key is on the table the spec needs
+  a device-class field and a written-down claim per class. Do that *before*
+  building the enclave path, not after.
+- **`SignedRoster` cannot be signed by a Signet.** `spec/enrollment-v1.md` §4.2
+  calls that the natural end state; it needs a small format addition (carry an
   `ApprovalEnvelope` rather than a raw signature) so the roster change is
   displayed and countersigned like anything else. The wrong fix is a firmware
   raw-sign mode — that is blind signing.
