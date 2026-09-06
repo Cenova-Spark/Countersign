@@ -1,10 +1,11 @@
 // The dial. One affordance, one meaning: press and hold, and it turns.
 //
-// Three detents to the commit, as on the device (`COMMIT_DEG = DETENT_DEG *
-// 3`, `web/src/lib/dial.js`). The ring fills with the hold; the index mark
-// turns with it; letting go gives it all back, visibly, because §6.3.4 says
-// an accumulated hold is discarded and the dial giving it back is the honest
-// way to show that.
+// The ring fills with the hold and the index mark turns a full circle with
+// it, so the hand and the fill say the same thing and the commit is where the
+// hand comes back to twelve. (The device's three detents, `web/src/lib/dial.js`,
+// are a physical dial's feel; on a screen a full turn reads.) Letting go gives
+// it all back, visibly, because §6.3.4 says an accumulated hold is discarded
+// and the dial giving it back is the honest way to show that.
 
 import CountersignKit
 import SwiftUI
@@ -16,7 +17,8 @@ struct HoldDial: View {
     let tick: Date
 
     @State private var pressed = false
-    private let commitDegrees: Double = 30
+    /// One full turn of the hand for one full ring.
+    private let commitDegrees: Double = 360
 
     var body: some View {
         let progress = hold.holdProgress
@@ -36,7 +38,7 @@ struct HoldDial: View {
                 .stroke(Theme.amber, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .padding(3)
-            // The index mark, turning toward the commit detent.
+            // The index mark, turning with the ring: a full circle by the commit.
             Capsule()
                 .fill(Theme.amber)
                 .frame(width: 4, height: 16)
