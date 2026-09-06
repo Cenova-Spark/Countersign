@@ -122,7 +122,7 @@ fn registry(device_id_source: &Daemon) -> Registry {
     );
 
     let mut registry = Registry::new();
-    registry.enrol(enrolled);
+    registry.enroll(enrolled);
     registry
 }
 

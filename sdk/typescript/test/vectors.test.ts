@@ -47,7 +47,7 @@ function approvalEnvelope(): ApprovalEnvelope {
 function testKeyRegistry(): Registry {
   const key = load("test-key.json");
   const registry = new Registry();
-  registry.enrol(hexDecode(key.public_key_sec1_uncompressed_hex), {
+  registry.enroll(hexDecode(key.public_key_sec1_uncompressed_hex), {
     is_test_key: true,
     operator: { subject: "alice@example.com" },
   });
@@ -243,5 +243,108 @@ describe("the enrollment vector", () => {
       );
       assert.equal(record.device_id, derived, "a record must not name another key's id");
     }
+  });
+});
+
+describe("the device-class vector", () => {
+  // spec/device-classes-v1.md. A phone or laptop approving under a biometric
+  // check is class `enclave`: a real approval with a smaller claim. The vector
+  // pins both the acceptance and the refusal so a port cannot get one right
+  // and the other wrong.
+  const doc = () => load("device-classes.json");
+  const envelope = () => doc().approval.envelope as ApprovalEnvelope;
+  const registry = () => new Registry().enrollRecord(doc().record);
+
+  it("enrolls the record as an enclave device", () => {
+    const device = registry().get(doc().enclave_key.device_id);
+    assert.ok(device, "the record's id must be the one derived from its key");
+    assert.equal(device.class, "enclave");
+    assert.equal(device.is_test_key, false);
+  });
+
+  it("verifies under a default policy, and says what kind of thing signed", () => {
+    const verified = verifyBundle(envelope(), registry(), defaultPolicy(), new MemoryCounters());
+    assert.equal(verified.signers.length, 1);
+    assert.equal(verified.signers[0].class, "enclave");
+    assert.deepEqual(verified.operators, ["bob@example.com"]);
+  });
+
+  it("is refused by a hardware-only policy", () => {
+    // The one-line way back. Nothing else about the verifier changes.
+    assert.throws(
+      () =>
+        verifyBundle(
+          envelope(),
+          registry(),
+          defaultPolicy({ acceptClasses: ["signet"] }),
+          new MemoryCounters(),
+        ),
+      (e: unknown) => (e as VerifyError).kind === "class_rejected",
+    );
+  });
+
+  it("takes the class from the record and never from the signature", () => {
+    // The same bytes, enrolled as a Signet, pass a hardware-only policy —
+    // nothing in a bundle says what kind of device signed it.
+    const publicKey = hexDecode(doc().record.public_key_hex);
+    verifyBundle(
+      envelope(),
+      new Registry().enroll(publicKey),
+      defaultPolicy({ acceptClasses: ["signet"] }),
+      new MemoryCounters(),
+    );
+    assert.throws(
+      () =>
+        verifyBundle(
+          envelope(),
+          new Registry().enroll(publicKey, { is_test_key: true }),
+          defaultPolicy(),
+          new MemoryCounters(),
+        ),
+      (e: unknown) => (e as VerifyError).kind === "test_key_rejected",
+    );
+  });
+
+  it("refuses a record whose class and test flag disagree", () => {
+    assert.throws(
+      () => new Registry().enrollRecord({ ...doc().record, is_test_key: true }),
+      (e: unknown) => (e as VerifyError).kind === "class_mismatch",
+    );
+  });
+
+  it("refuses an enclave record stripped of its proof", () => {
+    const { proof: _proof, ...stripped } = doc().record;
+    assert.throws(
+      () => new Registry().enrollRecord(stripped),
+      (e: unknown) => (e as VerifyError).kind === "enclave_without_proof",
+    );
+  });
+
+  it("reads a class-less record from before classes existed as before", () => {
+    // enrollment.json predates the field. Its record is a test key and must
+    // still read as one, with nothing re-issued.
+    const roster = JSON.parse(load("enrollment.json").signed_roster.roster_json);
+    const record = roster.records[0];
+    assert.equal(record.class, undefined, "the legacy vector must stay class-less");
+    const device = new Registry().enrollRecord(record).get(record.device_id);
+    assert.equal(device?.class, "test");
+  });
+
+  it("treats `test` in acceptClasses the same as acceptTestKeys", () => {
+    verifyBundle(
+      approvalEnvelope(),
+      testKeyRegistry(),
+      defaultPolicy({ acceptClasses: ["test"] }),
+      new MemoryCounters(),
+    );
+  });
+
+  it("builds the signing payload the vector pins", () => {
+    const sig = envelope().bundle.signatures[0];
+    assert.equal(
+      hexEncode(signingPayload(envelope().bundle.request_digest, sig.counter, sig.device_unix_ms)),
+      doc().approval.signing_payload_hex,
+    );
+    assert.equal(digestOfJson(envelope().request_json), envelope().bundle.request_digest);
   });
 });

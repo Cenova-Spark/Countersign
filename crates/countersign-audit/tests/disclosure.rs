@@ -200,7 +200,7 @@ fn a_revoked_device_still_accounts_for_what_it_approved_before_revocation() {
             at_counter: None,
             reason: Some("employee departed".into()),
         };
-        registry.enrol(device);
+        registry.enroll(device);
     }
 
     // Authorizing now: refused.

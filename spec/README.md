@@ -6,9 +6,10 @@
 | [`pack-protocol-v1.md`](pack-protocol-v1.md) | The domain-pack plugin interface, and the rules a host enforces on packs. |
 | [`enrollment-v1.md`](enrollment-v1.md) | The trust root: enrollment ceremony, records, rosters, revocation, and why one device belongs to one person. |
 | [`audit-v1.md`](audit-v1.md) | The audit trail: hash chain, detachable statements, disclosure levels, checkpoints, and sync. |
+| [`device-classes-v1.md`](device-classes-v1.md) | What kind of thing signed: the `signet`, `enclave` and `test` classes, the claim each makes, what an enclave implementation owes, and how a verifier chooses which to accept. |
 | [`vectors/`](vectors/) | Machine-readable conformance vectors. |
 
-Both are **drafts**, normative for the crates in this repository, and expected to
+All are **drafts**, normative for the crates in this repository, and expected to
 move until a non-Rust implementation exists — an implementer's first port is
 what usually finds the ambiguity.
 
@@ -20,6 +21,7 @@ what usually finds the ambiguity.
 | `approval.json` | A complete signed approval envelope, plus the exact signing payload in hex. |
 | `enrollment.json` | A countersigned enrollment proof and a roster signed by the published test authority. |
 | `test-key.json` | The published test keypair. |
+| `device-classes.json` | An `enclave`-class enrollment record with its proof, and an approval it signed. Accepted by a default verifier, refused by `accept_classes = ["signet"]`. Its key is public too — see the file's WARNING. |
 
 These are the contract; the Rust crates are one implementation of it. A port to
 Go or TypeScript should be checked against these files rather than against the
@@ -46,4 +48,4 @@ otherwise, so there is no code path where a software approval produces a
 production-valid signature. A mock left enabled by accident fails loudly at
 verification instead of silently passing.
 
-Never enrol this key as a production device. Nothing signed by it means anything.
+Never enroll this key as a production device. Nothing signed by it means anything.

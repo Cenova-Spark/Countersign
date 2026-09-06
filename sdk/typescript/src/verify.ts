@@ -36,6 +36,10 @@ export type VerifyErrorKind =
   | "action_mismatch"
   | "unknown_device"
   | "test_key_rejected"
+  | "class_rejected"
+  | "class_mismatch"
+  | "enclave_without_proof"
+  | "device_id_mismatch"
   | "device_revoked"
   | "bad_signature"
   | "high_s"
@@ -67,31 +71,131 @@ export type DeviceStatus =
   | { state: "active" }
   | { state: "revoked"; at_unix_ms: number; at_counter?: number; reason?: string };
 
+/**
+ * What kind of thing holds the key — and therefore how much its signature
+ * proves. See `spec/device-classes-v1.md`.
+ *
+ * `signet` is the hardware: the full claim. `enclave` is a platform secure
+ * enclave behind a biometric check on every use — a real approval with a
+ * smaller claim. `test` is a published key and proves nothing.
+ *
+ * The class is a property of the **enrollment**, never of the signature. A
+ * verifier learns it from a record it already trusts, and from nowhere else.
+ */
+export type DeviceClass = "signet" | "enclave" | "test";
+
 export interface EnrolledDevice {
   device_id: string;
   /** SEC1 uncompressed, 65 bytes. */
   public_key: Uint8Array;
   /** Whether this is a **published** test key. Refused unless opted into. */
   is_test_key: boolean;
+  /** What kind of thing holds the key. Always agrees with `is_test_key`. */
+  class: DeviceClass;
   operator?: Operator;
   status: DeviceStatus;
+}
+
+/**
+ * An enrollment record as it appears in a roster (`spec/enrollment-v1.md` §3,
+ * `spec/device-classes-v1.md` §4). Only the fields a verifier reads.
+ */
+export interface EnrollmentRecord {
+  device_id?: string;
+  /** SEC1 uncompressed, lowercase hex. */
+  public_key_hex: string;
+  /** Absent on rosters issued before classes existed; resolved from `is_test_key`. */
+  class?: DeviceClass;
+  is_test_key?: boolean;
+  operator?: Operator;
+  status?: DeviceStatus;
+  /** The countersigned ceremony. Mandatory for an `enclave` record. */
+  proof?: unknown;
+}
+
+function deviceIdOf(publicKey: Uint8Array): string {
+  return hexEncode(new Uint8Array(createHash("sha256").update(publicKey).digest()));
+}
+
+/**
+ * Resolve a record's class and test flag together, refusing disagreement.
+ *
+ * A record with no class reads as `test` when flagged and `signet` otherwise,
+ * so nothing already issued changes meaning. A record that says both is lying
+ * in one of two places, and a verifier cannot tell which.
+ */
+function resolveClass(
+  cls: DeviceClass | undefined,
+  isTestKey: boolean | undefined,
+): { class: DeviceClass; is_test_key: boolean } {
+  const resolved: DeviceClass = cls ?? (isTestKey ? "test" : "signet");
+  const flag = isTestKey ?? resolved === "test";
+  if ((resolved === "test") !== flag) {
+    throw new VerifyError(
+      `record says class ${resolved} but is_test_key is ${flag}; one of them is wrong and a ` +
+        `verifier cannot tell which`,
+      "class_mismatch",
+    );
+  }
+  return { class: resolved, is_test_key: flag };
 }
 
 /** The set of keys a verifier will accept. */
 export class Registry {
   private readonly devices = new Map<string, EnrolledDevice>();
 
-  /** Enrol a key. `device_id` is derived, never supplied. */
-  enrol(publicKey: Uint8Array, options: Partial<Omit<EnrolledDevice, "public_key">> = {}): this {
-    const deviceId = hexEncode(new Uint8Array(createHash("sha256").update(publicKey).digest()));
+  /**
+   * Enroll a key. `device_id` is derived, never supplied.
+   *
+   * The class defaults to `signet`, or `test` when `is_test_key` is set. Give
+   * a phone or laptop key `class: "enclave"`.
+   */
+  enroll(publicKey: Uint8Array, options: Partial<Omit<EnrolledDevice, "public_key">> = {}): this {
+    const deviceId = deviceIdOf(publicKey);
+    const { class: cls, is_test_key } = resolveClass(options.class, options.is_test_key);
     this.devices.set(deviceId, {
       device_id: deviceId,
       public_key: publicKey,
-      is_test_key: options.is_test_key ?? false,
+      is_test_key,
+      class: cls,
       operator: options.operator,
       status: options.status ?? { state: "active" },
     });
     return this;
+  }
+
+  /**
+   * Enroll from a roster record, carrying its owner, class and status across.
+   *
+   * Refuses a record whose `device_id` is not the digest of its own key, whose
+   * `class` and `is_test_key` disagree, or which is `enclave` with no proof —
+   * the proof is the only evidence the key signs under a presence check at all.
+   * This does not verify the proof's signature; a roster is verified as a
+   * whole before its records are trusted.
+   */
+  enrollRecord(record: EnrollmentRecord): this {
+    const publicKey = hexDecode(record.public_key_hex);
+    const derived = deviceIdOf(publicKey);
+    if (record.device_id !== undefined && record.device_id !== derived) {
+      throw new VerifyError(
+        `record claims device_id ${record.device_id} but its key derives ${derived}`,
+        "device_id_mismatch",
+      );
+    }
+    const { class: cls } = resolveClass(record.class, record.is_test_key);
+    if (cls === "enclave" && record.proof === undefined) {
+      throw new VerifyError(
+        "an enclave record must carry its enrollment proof — without it nothing shows the key " +
+          "can sign under a presence check",
+        "enclave_without_proof",
+      );
+    }
+    return this.enroll(publicKey, {
+      class: cls,
+      is_test_key: cls === "test",
+      operator: record.operator,
+      status: record.status,
+    });
   }
 
   get(deviceId: string): EnrolledDevice | undefined {
@@ -131,6 +235,18 @@ export interface VerifyPolicy {
    */
   acceptTestKeys: boolean;
   /**
+   * Which kinds of device may authorize something here.
+   *
+   * Defaults to `["signet", "enclave"]`. Including `enclave` is the product
+   * decision `spec/device-classes-v1.md` makes: a biometric-gated enclave key
+   * is a real approval with a smaller claim. An operator who wants hardware
+   * only passes `["signet"]` and nothing else changes.
+   *
+   * `test` is never in the default. Listing it is equivalent to
+   * `acceptTestKeys`; a test key counts if either says so.
+   */
+  acceptClasses: DeviceClass[];
+  /**
    * Whether the threshold counts distinct **people** rather than devices.
    *
    * Set this for any genuine dual-control rule. Two signatures alone means two
@@ -145,6 +261,7 @@ export function defaultPolicy(overrides: Partial<VerifyPolicy> = {}): VerifyPoli
   return {
     requiredSignatures: 1,
     acceptTestKeys: false,
+    acceptClasses: ["signet", "enclave"],
     requireDistinctOperators: false,
     acceptance: { mode: "now" },
     ...overrides,
@@ -223,6 +340,8 @@ export class FileCounters implements CounterStore {
 export interface VerifiedSigner {
   deviceId: string;
   operator?: Operator;
+  /** What kind of thing signed. A Signet and a phone are not the same approval. */
+  class: DeviceClass;
   counter: number;
   deviceUnixMs: number;
 }
@@ -332,10 +451,23 @@ export function verifySignatures(
       throw new VerifyError(`device ${sig.device_id} is not enrolled`, "unknown_device");
     }
 
-    if (device.is_test_key && !policy.acceptTestKeys) {
+    // Before the cryptography, and before revocation: a statement about what
+    // the policy will listen to at all. A device that says "test" in either
+    // field is treated as one; disagreement fails toward refusal.
+    const cls: DeviceClass = device.is_test_key ? "test" : device.class;
+    const accepted =
+      (cls === "test" && policy.acceptTestKeys) || policy.acceptClasses.includes(cls);
+    if (!accepted) {
+      if (cls === "test") {
+        throw new VerifyError(
+          `device ${sig.device_id} is a published test key; production verification refuses these`,
+          "test_key_rejected",
+        );
+      }
       throw new VerifyError(
-        `device ${sig.device_id} is a published test key; production verification refuses these`,
-        "test_key_rejected",
+        `device ${sig.device_id} is a ${cls}-class device, which this verifier's policy does ` +
+          `not accept`,
+        "class_rejected",
       );
     }
 
@@ -383,6 +515,7 @@ export function verifySignatures(
     counted.push({
       deviceId: sig.device_id,
       operator: device.operator,
+      class: cls,
       counter: sig.counter,
       deviceUnixMs: sig.device_unix_ms,
     });

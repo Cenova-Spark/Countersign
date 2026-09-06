@@ -368,7 +368,7 @@ fn build_registry(accept_test_keys: bool) -> Registry {
             signetd::device::TEST_KEY_DERIVATION.as_bytes(),
         ))
         .expect("the derived test scalar is valid");
-        registry.enrol(
+        registry.enroll(
             EnrolledDevice::test_key(key.verifying_key().to_sec1_bytes().to_vec())
                 .with_operator(countersign_verify::Operator::new("mock-device")),
         );

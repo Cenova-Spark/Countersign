@@ -134,6 +134,50 @@ impl DeviceStatus {
     }
 }
 
+/// What kind of thing holds the key — and therefore how much its signature
+/// proves. See `spec/device-classes-v1.md`.
+///
+/// The class is a property of the **enrollment**, never of the signature. A
+/// signer does not get to say what kind of thing it is, for the same reason it
+/// does not get to say what its `device_id` is: a verifier learns the class
+/// from a record it already trusts, and from nowhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeviceClass {
+    /// A Signet: a secure element, a screen only the firmware draws on, a dial
+    /// with one meaning, and a counter in silicon. The full wire-spec §1 claim.
+    Signet,
+    /// A platform secure enclave behind an operating-system presence check on
+    /// every use, rendering on a general-purpose OS. A real approval with a
+    /// smaller claim — the screen could be overlaid by a compromised OS, and
+    /// the counter is software bound to the key rather than silicon.
+    Enclave,
+    /// A **published** private key. Proves nothing. Exists so software can be
+    /// tested without a bypass that could survive into production.
+    Test,
+}
+
+impl DeviceClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DeviceClass::Signet => "signet",
+            DeviceClass::Enclave => "enclave",
+            DeviceClass::Test => "test",
+        }
+    }
+
+    /// Whether this class is the published-test-key class.
+    pub fn is_test(self) -> bool {
+        matches!(self, DeviceClass::Test)
+    }
+}
+
+impl std::fmt::Display for DeviceClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One enrolled device.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnrollmentRecord {
@@ -150,10 +194,21 @@ pub struct EnrollmentRecord {
     /// explicitly configured otherwise.
     #[serde(default)]
     pub is_test_key: bool,
+    /// What kind of thing holds the key — `spec/device-classes-v1.md` §4.
+    ///
+    /// Absent on every roster issued before classes existed;
+    /// [`EnrollmentRecord::class`] resolves those from `is_test_key`, so nothing
+    /// already issued changes meaning. When present it MUST agree with
+    /// `is_test_key`, and [`EnrollmentRecord::check_class`] refuses a record
+    /// where the two disagree, because one of them is lying and a verifier
+    /// cannot tell which.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<DeviceClass>,
     /// The countersigned enrollment, proving the device held its own key and a
     /// human was present. Optional in the format so a roster can be trimmed for
     /// size, but a verifier that never checks one is trusting the authority
-    /// completely.
+    /// completely. **Mandatory for an `enclave` record** — see
+    /// [`EnrollmentRecord::check_class`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proof: Option<ApprovalEnvelope>,
 }
@@ -167,8 +222,55 @@ impl EnrollmentRecord {
             enrolled_at_unix_ms,
             status: DeviceStatus::Active,
             is_test_key: false,
+            class: None,
             proof: None,
         }
+    }
+
+    /// Set the class, keeping `is_test_key` in agreement with it.
+    pub fn with_class(mut self, class: DeviceClass) -> Self {
+        self.class = Some(class);
+        self.is_test_key = class.is_test();
+        self
+    }
+
+    /// The device's class, resolving records issued before the field existed.
+    ///
+    /// A record with no `class` is read as [`DeviceClass::Test`] when
+    /// `is_test_key` is set and [`DeviceClass::Signet`] otherwise — every
+    /// roster issued before `spec/device-classes-v1.md` keeps its meaning.
+    pub fn class(&self) -> DeviceClass {
+        match self.class {
+            Some(class) => class,
+            None if self.is_test_key => DeviceClass::Test,
+            None => DeviceClass::Signet,
+        }
+    }
+
+    /// Confirm the record is internally consistent about what kind of thing
+    /// it describes.
+    ///
+    /// Two rules from `spec/device-classes-v1.md` §4. `class` and `is_test_key`
+    /// must agree — a record claiming to be a Signet while flagged as a test
+    /// key is lying in one of two places, and a verifier cannot tell which, so
+    /// it refuses the record whole. And an `enclave` record must carry its
+    /// proof: the ceremony rendered on the app's own screen and signed under a
+    /// presence check is the only evidence that the key can sign at all, and
+    /// a roster trimmed of it has trimmed the one thing that made the class
+    /// mean something.
+    pub fn check_class(&self) -> Result<(), EnrollmentError> {
+        if let Some(class) = self.class {
+            if class.is_test() != self.is_test_key {
+                return Err(EnrollmentError::ClassMismatch {
+                    class,
+                    is_test_key: self.is_test_key,
+                });
+            }
+        }
+        if self.class() == DeviceClass::Enclave && self.proof.is_none() {
+            return Err(EnrollmentError::EnclaveWithoutProof);
+        }
+        Ok(())
     }
 
     pub fn public_key(&self) -> Result<Vec<u8>, EnrollmentError> {
@@ -215,6 +317,7 @@ impl EnrollmentRecord {
     /// this record's operator exactly.
     pub fn verify_proof(&self, backend: &dyn SignatureBackend) -> Result<(), EnrollmentError> {
         self.check_device_id()?;
+        self.check_class()?;
         let proof = self.proof.as_ref().ok_or(EnrollmentError::MissingProof)?;
 
         if proof.bundle.decision != Decision::Approved {
@@ -396,6 +499,7 @@ impl SignedRoster {
 
         for record in &roster.records {
             record.check_device_id()?;
+            record.check_class()?;
         }
 
         Ok(roster)
@@ -487,6 +591,14 @@ pub enum EnrollmentError {
     ProofBadSignature,
     /// The proof signature is not low-S (spec §4).
     ProofNotLowS,
+    /// `class` and `is_test_key` disagree — one of them is lying.
+    ClassMismatch {
+        class: DeviceClass,
+        is_test_key: bool,
+    },
+    /// An `enclave` record arrived without its enrollment proof, which is the
+    /// one thing that made the class mean something.
+    EnclaveWithoutProof,
     MalformedProof(String),
     MalformedRoster(String),
     WrongAuthority {
@@ -527,10 +639,19 @@ impl std::fmt::Display for EnrollmentError {
                 write!(f, "enrollment proof says {found:?}, expected {expected:?}")
             }
             ProofNotSelfSigned => {
-                f.write_str("enrollment proof was not signed by the device it enrols")
+                f.write_str("enrollment proof was not signed by the device it enrolls")
             }
             ProofBadSignature => f.write_str("enrollment proof signature did not verify"),
             ProofNotLowS => f.write_str("enrollment proof signature is not low-S"),
+            ClassMismatch { class, is_test_key } => write!(
+                f,
+                "record says class {class} but is_test_key is {is_test_key}; one of them is wrong \
+                 and a verifier cannot tell which"
+            ),
+            EnclaveWithoutProof => f.write_str(
+                "an enclave record must carry its enrollment proof — without it nothing shows the \
+                 key can sign under a presence check",
+            ),
             MalformedProof(e) => write!(f, "malformed enrollment proof: {e}"),
             MalformedRoster(e) => write!(f, "malformed roster: {e}"),
             WrongAuthority { expected, found } => {
@@ -793,6 +914,66 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_class_less_record_resolves_from_its_test_flag() {
+        // Every roster issued before spec/device-classes-v1.md keeps meaning.
+        let mut r = record(1);
+        assert_eq!(r.class, None);
+        assert_eq!(r.class(), DeviceClass::Signet);
+        r.is_test_key = true;
+        assert_eq!(r.class(), DeviceClass::Test);
+        assert!(r.check_class().is_ok());
+    }
+
+    #[test]
+    fn a_class_that_disagrees_with_the_test_flag_is_refused() {
+        // One of them is lying and a verifier cannot tell which.
+        let mut r = record(1).with_class(DeviceClass::Signet);
+        assert!(r.check_class().is_ok());
+        r.is_test_key = true;
+        assert_eq!(
+            r.check_class(),
+            Err(EnrollmentError::ClassMismatch {
+                class: DeviceClass::Signet,
+                is_test_key: true,
+            })
+        );
+
+        let mut r = record(2).with_class(DeviceClass::Test);
+        assert!(r.is_test_key, "with_class sets the flag");
+        r.is_test_key = false;
+        assert!(matches!(
+            r.check_class(),
+            Err(EnrollmentError::ClassMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn an_enclave_record_needs_its_proof() {
+        let r = record(1).with_class(DeviceClass::Enclave);
+        assert_eq!(r.check_class(), Err(EnrollmentError::EnclaveWithoutProof));
+        // verify_proof reports the same thing, rather than the generic
+        // MissingProof, so the caller learns which rule they broke.
+        assert_eq!(
+            r.verify_proof(&AlwaysValid),
+            Err(EnrollmentError::EnclaveWithoutProof)
+        );
+    }
+
+    #[test]
+    fn class_round_trips_through_json_and_is_omitted_when_absent() {
+        let r = record(1).with_class(DeviceClass::Enclave);
+        let text = serde_json::to_string(&r).unwrap();
+        assert!(text.contains(r#""class":"enclave""#), "got {text}");
+        assert_eq!(
+            serde_json::from_str::<EnrollmentRecord>(&text).unwrap().class,
+            Some(DeviceClass::Enclave)
+        );
+
+        let legacy = serde_json::to_string(&record(1)).unwrap();
+        assert!(!legacy.contains("class"), "a class-less record stays class-less: {legacy}");
     }
 
     #[test]

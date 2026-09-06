@@ -1,0 +1,68 @@
+{
+  "WARNING": "The private key below is PUBLIC, and the record labels it `enclave` anyway — which is exactly what spec/device-classes-v1.md §2 forbids for a real device. It is labelled that way so a port can test the class acceptance and refusal paths. NEVER enroll this key anywhere.",
+  "approval": {
+    "digest_short": "d93d4bb23cf9",
+    "envelope": {
+      "bundle": {
+        "decision": "approved",
+        "request_digest": "d93d4bb23cf9feff85c3359d9eef7b4c7699fa452e740ba5f4a72df4d6982712",
+        "signatures": [
+          {
+            "counter": 7,
+            "device_id": "86100ee3cc4c16722fc1602d72ee23cf7096b5e05414ce17bfa860302053aebf",
+            "device_unix_ms": 1756000120000,
+            "dwell_ms": 5120,
+            "signature": "ymoLOgECsl2ZN54uMnWTr1auP1r__wJQvr2vP3cznC0ZWSTaaGA-jdxyyW3aOVbKHbUxIjIoHn_6aggBi7yG4w"
+          }
+        ],
+        "v": 1
+      },
+      "request_json": "{\"action\":\"sql.dml\",\"advisory\":{\"reversible\":false,\"rows_affected\":18250},\"nonce\":\"Y291bnRlcnNpZ24tdGVzdC12ZWN0b3Itbm9uY2UtMDQ\",\"requester\":{\"id\":\"claude-code\",\"instance\":\"vector-session-2\"},\"statement\":\"DELETE FROM sessions WHERE expires_at < now();\",\"target\":{\"kind\":\"database\",\"uri_fingerprint\":\"743926793514b7a155f9ce1ff61570f741bab2b60278d35ae2ffb1737988385d\"},\"ttl_ms\":60000,\"v\":1}"
+    },
+    "signing_payload_hex": "636f756e7465727369676e2d763100d93d4bb23cf9feff85c3359d9eef7b4c7699fa452e740ba5f4a72df4d6982712000000000000000700000198d9c36cc0"
+  },
+  "enclave_key": {
+    "curve": "P-256",
+    "derivation": "private scalar = SHA-256(\"countersign-v1 published test key · enclave vector\")",
+    "device_id": "86100ee3cc4c16722fc1602d72ee23cf7096b5e05414ce17bfa860302053aebf",
+    "private_key_hex": "63ea731ae5ae25657debdc5d97e92a2f9aa61dff7bc14bddcb7e7e9d539d93d8",
+    "public_key_sec1_uncompressed_hex": "04aa859d18de761251c4619561864233f059766af0e1cea3fbf43e0173924afa0dd660cbe3063fc86ff3fc72713b3f2fbfd591b1554b1f501825c885f9de8f0d44"
+  },
+  "expected": {
+    "accept_classes_signet_only": "class_rejected",
+    "default_policy": "approved",
+    "record_with_is_test_key_true": "class_mismatch",
+    "record_without_proof": "enclave_without_proof"
+  },
+  "note": "An enrollment record of class `enclave` with its proof, and an approval that key signed. A default verifier accepts the approval; a verifier with accept_classes = [\"signet\"] refuses it with class_rejected.",
+  "record": {
+    "class": "enclave",
+    "device_id": "86100ee3cc4c16722fc1602d72ee23cf7096b5e05414ce17bfa860302053aebf",
+    "enrolled_at_unix_ms": 1756000000000,
+    "is_test_key": false,
+    "operator": {
+      "subject": "bob@example.com"
+    },
+    "proof": {
+      "bundle": {
+        "decision": "approved",
+        "request_digest": "4ba127370eef093e7339beb455b6d0124400dabe102bc9186edb3e4c7d50f1b9",
+        "signatures": [
+          {
+            "counter": 1,
+            "device_id": "86100ee3cc4c16722fc1602d72ee23cf7096b5e05414ce17bfa860302053aebf",
+            "device_unix_ms": 1756000000000,
+            "dwell_ms": 2410,
+            "signature": "5p8DqdckgCTsL6g-rr7c6b_Mb2o6muEBGefa0kxRHwx6uvhRlENVoGMWCC-PjdH2S_3NnvtldcTbEs6S3jZNqA"
+          }
+        ],
+        "v": 1
+      },
+      "request_json": "{\"action\":\"countersign.enroll\",\"nonce\":\"Y291bnRlcnNpZ24tdGVzdC12ZWN0b3Itbm9uY2UtMDM\",\"requester\":{\"id\":\"signet-app\",\"instance\":\"enrolment\"},\"statement\":\"Enroll this device as an approver for bob@example.com\",\"target\":{\"kind\":\"enrollment\",\"uri_fingerprint\":\"5ff860bf1190596c7188ab851db691f0f3169c453936e9e1eba2f9a47f7a0018\"},\"ttl_ms\":120000,\"v\":1}"
+    },
+    "public_key_hex": "04aa859d18de761251c4619561864233f059766af0e1cea3fbf43e0173924afa0dd660cbe3063fc86ff3fc72713b3f2fbfd591b1554b1f501825c885f9de8f0d44",
+    "status": {
+      "state": "active"
+    }
+  }
+}

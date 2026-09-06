@@ -92,14 +92,14 @@ fn request(action: &str, statement: &str, nonce: &str, fingerprint: &str) -> Req
 
 /// Run the enrollment ceremony for real: the device countersigns its own
 /// enrollment statement.
-fn enrol(name: &str, subject: &str, at_ms: u64) -> (SigningKey, EnrollmentRecord) {
+fn enroll(name: &str, subject: &str, at_ms: u64) -> (SigningKey, EnrollmentRecord) {
     let key = device_key(name);
     let public = public_of(&key);
 
     let req = request(
         ENROLLMENT_ACTION,
         &enrollment_statement(subject),
-        &format!("nonce-enrol-{name}"),
+        &format!("nonce-enroll-{name}"),
         &hex_encode(&Sha256::digest(subject.as_bytes())),
     );
     let proof = approve(&key, &req, 1, at_ms);
@@ -131,7 +131,7 @@ fn db_approval(key: &SigningKey, counter: u64, at_ms: u64) -> ApprovalEnvelope {
 fn registry_of(records: &[&EnrollmentRecord]) -> Registry {
     let mut r = Registry::new();
     for record in records {
-        r.enrol(countersign_verify::EnrolledDevice::from_record(record).unwrap());
+        r.enroll(countersign_verify::EnrolledDevice::from_record(record).unwrap());
     }
     r
 }
@@ -149,13 +149,13 @@ fn check(envelope: &ApprovalEnvelope, registry: &Registry) -> Result<Vec<String>
 }
 
 const ALICE: &str = "alice@example.com";
-const T_ENROL: u64 = 1_700_000_000_000;
+const T_ENROLL: u64 = 1_700_000_000_000;
 const T_LOST: u64 = 1_800_000_000_000;
 
 #[test]
 fn one_person_can_hold_a_work_and_a_home_device_at_once() {
-    let (work_key, work) = enrol("alice-work", ALICE, T_ENROL);
-    let (home_key, home) = enrol("alice-home", ALICE, T_ENROL);
+    let (work_key, work) = enroll("alice-work", ALICE, T_ENROLL);
+    let (home_key, home) = enroll("alice-home", ALICE, T_ENROLL);
 
     // Two records, two device ids, one subject.
     assert_ne!(work.device_id, home.device_id);
@@ -170,19 +170,19 @@ fn one_person_can_hold_a_work_and_a_home_device_at_once() {
 
     // Either device authorizes, and both resolve to the same person.
     assert_eq!(
-        check(&db_approval(&work_key, 10, T_ENROL), &registry).unwrap(),
+        check(&db_approval(&work_key, 10, T_ENROLL), &registry).unwrap(),
         vec![ALICE]
     );
     assert_eq!(
-        check(&db_approval(&home_key, 10, T_ENROL), &registry).unwrap(),
+        check(&db_approval(&home_key, 10, T_ENROLL), &registry).unwrap(),
         vec![ALICE]
     );
 }
 
 #[test]
 fn losing_one_device_does_not_lock_the_person_out_of_the_others() {
-    let (work_key, mut work) = enrol("alice-work", ALICE, T_ENROL);
-    let (home_key, home) = enrol("alice-home", ALICE, T_ENROL);
+    let (work_key, mut work) = enroll("alice-work", ALICE, T_ENROLL);
+    let (home_key, home) = enroll("alice-home", ALICE, T_ENROLL);
 
     // The work Signet is lost and revoked. Revocation is per device, not per
     // person — the home device is untouched.
@@ -209,8 +209,8 @@ fn losing_one_device_does_not_lock_the_person_out_of_the_others() {
 
 #[test]
 fn a_replacement_device_works_immediately_and_independently() {
-    let (work_key, mut work) = enrol("alice-work", ALICE, T_ENROL);
-    let (_home_key, home) = enrol("alice-home", ALICE, T_ENROL);
+    let (work_key, mut work) = enroll("alice-work", ALICE, T_ENROLL);
+    let (_home_key, home) = enroll("alice-home", ALICE, T_ENROLL);
 
     work.status = DeviceStatus::Revoked {
         at_unix_ms: T_LOST,
@@ -218,10 +218,10 @@ fn a_replacement_device_works_immediately_and_independently() {
         reason: Some("lost".into()),
     };
 
-    // Alice enrols the replacement under the same subject. Nothing about the
+    // Alice enrolls the replacement under the same subject. Nothing about the
     // revoked record constrains it: a new key means a new device_id, and the
     // ceremony is the ordinary one.
-    let (replacement_key, replacement) = enrol("alice-replacement", ALICE, T_LOST + 1);
+    let (replacement_key, replacement) = enroll("alice-replacement", ALICE, T_LOST + 1);
 
     assert_ne!(replacement.device_id, work.device_id);
     assert_eq!(replacement.operator.subject, ALICE);
@@ -245,15 +245,15 @@ fn a_replacement_reuses_low_counter_values_without_tripping_replay_defence() {
     // A new device starts its counter near zero, well below whatever the lost
     // one had reached. Counters are per device, so this must not look like a
     // regression.
-    let (work_key, work) = enrol("alice-work", ALICE, T_ENROL);
-    let (replacement_key, replacement) = enrol("alice-replacement", ALICE, T_LOST);
+    let (work_key, work) = enroll("alice-work", ALICE, T_ENROLL);
+    let (replacement_key, replacement) = enroll("alice-replacement", ALICE, T_LOST);
     let registry = registry_of(&[&work, &replacement]);
 
     let mut counters = MemoryCounters::new();
     let policy = VerifyPolicy::default();
 
     verify_bundle(
-        &db_approval(&work_key, 40_000, T_ENROL),
+        &db_approval(&work_key, 40_000, T_ENROLL),
         &registry,
         &policy,
         &mut counters,
@@ -275,8 +275,8 @@ fn a_replacement_reuses_low_counter_values_without_tripping_replay_defence() {
 
 #[test]
 fn approvals_the_lost_device_gave_before_revocation_still_audit() {
-    let (work_key, mut work) = enrol("alice-work", ALICE, T_ENROL);
-    let envelope = db_approval(&work_key, 12, T_ENROL);
+    let (work_key, mut work) = enroll("alice-work", ALICE, T_ENROLL);
+    let envelope = db_approval(&work_key, 12, T_ENROLL);
 
     work.status = DeviceStatus::Revoked {
         at_unix_ms: T_LOST,
@@ -286,7 +286,7 @@ fn approvals_the_lost_device_gave_before_revocation_still_audit() {
     let registry = registry_of(&[&work]);
 
     let auditing = VerifyPolicy {
-        acceptance: Acceptance::AsOf(T_ENROL),
+        acceptance: Acceptance::AsOf(T_ENROLL),
         ..Default::default()
     };
     let verified = verify_bundle(
@@ -304,9 +304,9 @@ fn approvals_the_lost_device_gave_before_revocation_still_audit() {
 #[test]
 fn two_of_alices_devices_are_still_only_one_person() {
     // The spare must not become a way to satisfy dual control alone.
-    let (work_key, work) = enrol("alice-work", ALICE, T_ENROL);
-    let (home_key, home) = enrol("alice-home", ALICE, T_ENROL);
-    let (bob_key, bob) = enrol("bob", "bob@example.com", T_ENROL);
+    let (work_key, work) = enroll("alice-work", ALICE, T_ENROLL);
+    let (home_key, home) = enroll("alice-home", ALICE, T_ENROLL);
+    let (bob_key, bob) = enroll("bob", "bob@example.com", T_ENROLL);
 
     let registry = registry_of(&[&work, &home, &bob]);
     let dual = VerifyPolicy {
@@ -318,8 +318,8 @@ fn two_of_alices_devices_are_still_only_one_person() {
     // Build one request signed by two devices.
     let req = request("sql.execute", "DROP TABLE users", "nonce-dual", "9f2c");
     let two_of = |a: &SigningKey, b: &SigningKey| {
-        let mut env = approve(a, &req, 20, T_ENROL);
-        let other = approve(b, &req, 20, T_ENROL);
+        let mut env = approve(a, &req, 20, T_ENROLL);
+        let other = approve(b, &req, 20, T_ENROLL);
         env.bundle.signatures.extend(other.bundle.signatures);
         env
     };
@@ -357,8 +357,8 @@ fn two_of_alices_devices_are_still_only_one_person() {
 fn an_enrollment_proof_from_one_device_cannot_stand_in_for_another() {
     // Both of Alice's devices sign the same statement text, so the proof has to
     // be bound to the key, not the words.
-    let (_work_key, work) = enrol("alice-work", ALICE, T_ENROL);
-    let (_home_key, home) = enrol("alice-home", ALICE, T_ENROL);
+    let (_work_key, work) = enroll("alice-work", ALICE, T_ENROLL);
+    let (_home_key, home) = enroll("alice-home", ALICE, T_ENROLL);
 
     let mut forged = home.clone();
     forged.proof = work.proof.clone();
@@ -367,7 +367,7 @@ fn an_enrollment_proof_from_one_device_cannot_stand_in_for_another() {
     assert_eq!(
         err,
         countersign_verify::EnrollmentError::ProofNotSelfSigned,
-        "a proof signed by a different device must not enrol this one"
+        "a proof signed by a different device must not enroll this one"
     );
 }
 
@@ -381,11 +381,11 @@ fn every_signature_the_signer_emits_is_low_s() {
     // single signature proves nothing here — the failure is probabilistic, so
     // the test has to be too. Without `sign_low_s`, this fails within a few
     // iterations essentially always.
-    let (key, record) = enrol("low-s-property", ALICE, T_ENROL);
+    let (key, record) = enroll("low-s-property", ALICE, T_ENROLL);
     let registry = registry_of(&[&record]);
 
     for counter in 1..64u64 {
-        let envelope = db_approval(&key, counter, T_ENROL + counter);
+        let envelope = db_approval(&key, counter, T_ENROLL + counter);
         check(&envelope, &registry)
             .unwrap_or_else(|e| panic!("signature {counter} was rejected: {e}"));
     }
@@ -405,8 +405,8 @@ fn every_signature_path_refuses_a_high_s_signature() {
     let encoded = b64url_encode(&high_s);
 
     // Approval bundle.
-    let (key, record) = enrol("high-s", ALICE, T_ENROL);
-    let mut envelope = db_approval(&key, 5, T_ENROL);
+    let (key, record) = enroll("high-s", ALICE, T_ENROLL);
+    let mut envelope = db_approval(&key, 5, T_ENROLL);
     envelope.bundle.signatures[0].signature = encoded.clone();
     assert!(matches!(
         check(&envelope, &registry_of(&[&record])).unwrap_err(),
@@ -427,7 +427,7 @@ fn every_signature_path_refuses_a_high_s_signature() {
     let authority = device_key("high-s-authority");
     let roster = Roster {
         v: VERSION,
-        issued_at_unix_ms: T_ENROL,
+        issued_at_unix_ms: T_ENROLL,
         serial: 1,
         authority_id: hex_encode(&Sha256::digest(public_of(&authority))),
         records: vec![record],
@@ -452,9 +452,9 @@ fn no_decision_other_than_approved_can_carry_a_signature() {
     // some future firmware tried to.
     use countersign_verify::{Bundle, Decision};
 
-    let (key, record) = enrol("no-signed-denial", ALICE, T_ENROL);
+    let (key, record) = enroll("no-signed-denial", ALICE, T_ENROLL);
     let registry = registry_of(&[&record]);
-    let genuine = db_approval(&key, 5, T_ENROL);
+    let genuine = db_approval(&key, 5, T_ENROLL);
 
     for decision in [
         Decision::Aborted,

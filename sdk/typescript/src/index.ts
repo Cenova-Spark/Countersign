@@ -63,8 +63,10 @@ export {
 export type {
   Acceptance,
   CounterStore,
+  DeviceClass,
   DeviceStatus,
   EnrolledDevice,
+  EnrollmentRecord,
   Execution,
   Operator,
   Verified,

@@ -71,8 +71,9 @@ pub mod verify;
 
 pub use bundle::{ApprovalEnvelope, Bundle, Decision, DeviceSignature};
 pub use enrollment::{
-    accept_roster, enrollment_statement, DeviceStatus, EnrollmentError, EnrollmentRecord,
-    MemoryRosterStore, Operator, Roster, RosterStore, SignedRoster, ENROLLMENT_ACTION,
+    accept_roster, enrollment_statement, DeviceClass, DeviceStatus, EnrollmentError,
+    EnrollmentRecord, MemoryRosterStore, Operator, Roster, RosterStore, SignedRoster,
+    ENROLLMENT_ACTION,
 };
 pub use jcs::{canonicalize, canonicalize_str, JcsError};
 pub use request::{

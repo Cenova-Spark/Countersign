@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use countersign_verify::encoding::{b64url_encode, hex_encode};
 use countersign_verify::{
     canonicalize_str, digest_of_json, enrollment_statement, signing_payload, ApprovalEnvelope,
-    Bundle, Decision, DeviceSignature, EnrollmentRecord, Operator, Request, Requester, Roster,
-    SignedRoster, Target, ENROLLMENT_ACTION, VERSION,
+    Bundle, Decision, DeviceClass, DeviceSignature, EnrollmentRecord, Operator, Request,
+    Requester, Roster, SignedRoster, Target, ENROLLMENT_ACTION, VERSION,
 };
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
@@ -32,8 +32,17 @@ const TEST_KEY_DERIVATION: &str = "countersign-v1 published test key";
 /// The string the published test **enrollment authority** key is derived from.
 ///
 /// A separate key from the device key on purpose: a roster signed by the same
-/// key it enrols would prove nothing about who authorized the enrolment.
+/// key it enrolls would prove nothing about who authorized the enrollment.
 const TEST_AUTHORITY_DERIVATION: &str = "countersign-v1 published test enrollment authority";
+
+/// The string the device-class vector's **enclave-labelled** key is derived
+/// from.
+///
+/// A published key is exactly what the `enclave` class forbids, and that is
+/// tolerable in a conformance vector and nowhere else: the record carries the
+/// label so a port can test the acceptance and refusal paths for the class,
+/// and the file's WARNING says never to enroll it anywhere real.
+const ENCLAVE_VECTOR_DERIVATION: &str = "countersign-v1 published test key · enclave vector";
 
 /// Sign, normalizing `s` into the low half.
 ///
@@ -200,6 +209,9 @@ fn main() -> std::io::Result<()> {
         nonce: "Y291bnRlcnNpZ24tdGVzdC12ZWN0b3Itbm9uY2UtMDI".into(),
         requester: Requester {
             id: "countersign-cli".into(),
+            // British spelling, kept on purpose: this string is inside the
+            // signed request bytes of a committed vector, and changing it
+            // would change the digest every port checks against.
             instance: "enrolment".into(),
             pid: None,
         },
@@ -276,9 +288,147 @@ fn main() -> std::io::Result<()> {
         }),
     )?;
 
+    // ---- device classes: an enclave record and an approval it signed --------
+    //
+    // A phone or a laptop approving under a biometric check is class
+    // `enclave` — a real approval with a smaller claim
+    // (spec/device-classes-v1.md). A default verifier accepts it and
+    // `accept_classes = ["signet"]` refuses it, and this vector pins both so a
+    // port cannot get one right and the other wrong.
+    let enclave = SigningKey::from_slice(&Sha256::digest(ENCLAVE_VECTOR_DERIVATION.as_bytes()))
+        .expect("derived scalar is a valid P-256 key");
+    let enclave_public = enclave.verifying_key().to_sec1_bytes().to_vec();
+    let enclave_id = hex_encode(&Sha256::digest(&enclave_public));
+    let enclave_subject = "bob@example.com";
+    let enclave_enrolled_ms = 1_756_000_000_000u64;
+
+    // The proof is the ordinary ceremony, rendered on the app's own screen.
+    // An enclave record without one is refused whole (§4), because the proof
+    // is the only evidence the key can sign under a presence check at all.
+    let enclave_enroll = Request {
+        v: VERSION,
+        nonce: "Y291bnRlcnNpZ24tdGVzdC12ZWN0b3Itbm9uY2UtMDM".into(),
+        requester: Requester {
+            id: "signet-app".into(),
+            // British spelling, kept on purpose: this string is inside the
+            // signed request bytes of a committed vector, and changing it
+            // would change the digest every port checks against.
+            instance: "enrolment".into(),
+            pid: None,
+        },
+        action: ENROLLMENT_ACTION.into(),
+        target: Target {
+            kind: "enrollment".into(),
+            uri_fingerprint: hex_encode(&Sha256::digest(enclave_subject.as_bytes())),
+        },
+        statement: enrollment_statement(enclave_subject),
+        advisory: None,
+        ttl_ms: 120_000,
+    };
+    let enclave_enroll_json =
+        canonicalize_str(&serde_json::to_string(&enclave_enroll).unwrap()).unwrap();
+    let enclave_enroll_digest = digest_of_json(&enclave_enroll_json).unwrap();
+    let enclave_enroll_tbs = signing_payload(&enclave_enroll_digest, 1, enclave_enrolled_ms).unwrap();
+    let enclave_enroll_sig = sign_low_s(&enclave, &enclave_enroll_tbs);
+
+    let mut enclave_record = EnrollmentRecord::new(
+        &enclave_public,
+        Operator::new(enclave_subject),
+        enclave_enrolled_ms,
+    )
+    .with_class(DeviceClass::Enclave);
+    enclave_record.proof = Some(ApprovalEnvelope {
+        request_json: enclave_enroll_json,
+        bundle: Bundle {
+            v: VERSION,
+            decision: Decision::Approved,
+            request_digest: enclave_enroll_digest,
+            signatures: vec![DeviceSignature {
+                device_id: enclave_id.clone(),
+                counter: 1,
+                device_unix_ms: enclave_enrolled_ms,
+                signature: b64url_encode(&enclave_enroll_sig.to_bytes()),
+                dwell_ms: Some(2410),
+            }],
+        },
+    });
+
+    let enclave_request = Request {
+        v: VERSION,
+        nonce: "Y291bnRlcnNpZ24tdGVzdC12ZWN0b3Itbm9uY2UtMDQ".into(),
+        requester: Requester {
+            id: "claude-code".into(),
+            instance: "vector-session-2".into(),
+            pid: None,
+        },
+        action: "sql.dml".into(),
+        target: Target {
+            kind: "database".into(),
+            uri_fingerprint: countersign_verify::fingerprint_uri(
+                "postgres://analyst:pw@warehouse.example.com/analytics",
+            ),
+        },
+        statement: "DELETE FROM sessions WHERE expires_at < now();".into(),
+        advisory: Some(json!({ "reversible": false, "rows_affected": 18250 })),
+        ttl_ms: 60000,
+    };
+    let enclave_request_json =
+        canonicalize_str(&serde_json::to_string(&enclave_request).unwrap()).unwrap();
+    let enclave_digest = digest_of_json(&enclave_request_json).unwrap();
+    let enclave_counter = 7u64;
+    let enclave_ms = 1_756_000_120_000u64;
+    let enclave_tbs = signing_payload(&enclave_digest, enclave_counter, enclave_ms).unwrap();
+    let enclave_sig = sign_low_s(&enclave, &enclave_tbs);
+
+    let enclave_bundle = Bundle {
+        v: VERSION,
+        decision: Decision::Approved,
+        request_digest: enclave_digest.clone(),
+        signatures: vec![DeviceSignature {
+            device_id: enclave_id.clone(),
+            counter: enclave_counter,
+            device_unix_ms: enclave_ms,
+            signature: b64url_encode(&enclave_sig.to_bytes()),
+            dwell_ms: Some(5120),
+        }],
+    };
+
+    write(
+        &out.join("device-classes.json"),
+        &json!({
+            "WARNING": "The private key below is PUBLIC, and the record labels it `enclave` anyway — \
+                        which is exactly what spec/device-classes-v1.md §2 forbids for a real device. \
+                        It is labelled that way so a port can test the class acceptance and refusal \
+                        paths. NEVER enroll this key anywhere.",
+            "note": "An enrollment record of class `enclave` with its proof, and an approval that key \
+                     signed. A default verifier accepts the approval; a verifier with \
+                     accept_classes = [\"signet\"] refuses it with class_rejected.",
+            "enclave_key": {
+                "derivation": format!("private scalar = SHA-256({ENCLAVE_VECTOR_DERIVATION:?})"),
+                "curve": "P-256",
+                "private_key_hex": hex_encode(&enclave.to_bytes()),
+                "public_key_sec1_uncompressed_hex": hex_encode(&enclave_public),
+                "device_id": enclave_id,
+            },
+            "record": enclave_record,
+            "approval": {
+                "signing_payload_hex": hex_encode(&enclave_tbs),
+                "digest_short": &enclave_digest[..12],
+                "envelope": { "request_json": enclave_request_json, "bundle": enclave_bundle },
+            },
+            "expected": {
+                "default_policy": "approved",
+                "accept_classes_signet_only": "class_rejected",
+                "record_with_is_test_key_true": "class_mismatch",
+                "record_without_proof": "enclave_without_proof",
+            },
+        }),
+    )?;
+
     println!("wrote vectors to {}", out.display());
     println!("device_id    {device_id}");
     println!("authority_id {authority_id}");
+    println!("enclave_id   {enclave_id}");
     Ok(())
 }
 

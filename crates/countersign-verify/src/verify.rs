@@ -15,7 +15,9 @@ use sha2::{Digest, Sha256};
 
 use crate::bundle::{ApprovalEnvelope, Decision, DeviceSignature};
 use crate::encoding::{b64url_decode, hex_encode, EncodingError};
-use crate::enrollment::{DeviceStatus, EnrollmentError, EnrollmentRecord, Operator, Roster};
+use crate::enrollment::{
+    DeviceClass, DeviceStatus, EnrollmentError, EnrollmentRecord, Operator, Roster,
+};
 use crate::jcs::JcsError;
 use crate::request::digest_of_json;
 use crate::store::StoreError;
@@ -88,8 +90,13 @@ pub struct EnrolledDevice {
     /// SEC1 uncompressed, 65 bytes.
     pub public_key: Vec<u8>,
     /// Whether this is a **published** test key — one whose private half is in
-    /// a public repository. See [`VerifyPolicy::accept_test_keys`].
+    /// a public repository. See [`VerifyPolicy::accept_test_keys`]. Always
+    /// agrees with `class` when built through this crate's constructors.
     pub is_test_key: bool,
+    /// What kind of thing holds the key, and so how much its signature proves.
+    /// Checked against [`VerifyPolicy::accept_classes`] before the
+    /// cryptography. See `spec/device-classes-v1.md`.
+    pub class: DeviceClass,
     /// The human this device belongs to.
     ///
     /// `None` means the verifier knows a key but not an owner, which is fine
@@ -103,28 +110,35 @@ pub struct EnrolledDevice {
 }
 
 impl EnrolledDevice {
-    /// Enrol a production key. `device_id` is derived, never supplied — a
-    /// caller-chosen id would let one key be registered under another's name.
+    /// Enroll a production key as a Signet. `device_id` is derived, never
+    /// supplied — a caller-chosen id would let one key be registered under
+    /// another's name.
     pub fn new(public_key: Vec<u8>) -> Self {
         let device_id = hex_encode(&Sha256::digest(&public_key));
         Self {
             device_id,
             public_key,
             is_test_key: false,
+            class: DeviceClass::Signet,
             operator: None,
             status: DeviceStatus::Active,
             label: None,
         }
     }
 
-    /// Build from an enrollment record, carrying its owner and revocation
-    /// status across.
+    /// Build from an enrollment record, carrying its owner, class and
+    /// revocation status across.
+    ///
+    /// Refuses a record whose `class` and `is_test_key` disagree, and an
+    /// `enclave` record with no proof — see [`EnrollmentRecord::check_class`].
     pub fn from_record(record: &EnrollmentRecord) -> Result<Self, EnrollmentError> {
         record.check_device_id()?;
+        record.check_class()?;
         Ok(Self {
             device_id: record.device_id.clone(),
             public_key: record.public_key()?,
             is_test_key: record.is_test_key,
+            class: record.class(),
             operator: Some(record.operator.clone()),
             status: record.status.clone(),
             label: record.operator.display.clone(),
@@ -136,12 +150,23 @@ impl EnrolledDevice {
         self
     }
 
-    /// Enrol a key as a known test key. Rejected by default at verification.
+    /// Enroll a key as a known test key. Rejected by default at verification.
     pub fn test_key(public_key: Vec<u8>) -> Self {
-        Self {
-            is_test_key: true,
-            ..Self::new(public_key)
-        }
+        Self::new(public_key).with_class(DeviceClass::Test)
+    }
+
+    /// Enroll a key held in a platform secure enclave — a phone or a laptop
+    /// approving under a biometric check. Accepted by default, refusable with
+    /// `accept_classes = ["signet"]`.
+    pub fn enclave(public_key: Vec<u8>) -> Self {
+        Self::new(public_key).with_class(DeviceClass::Enclave)
+    }
+
+    /// Set the class, keeping `is_test_key` in agreement with it.
+    pub fn with_class(mut self, class: DeviceClass) -> Self {
+        self.class = class;
+        self.is_test_key = class.is_test();
+        self
     }
 
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
@@ -161,7 +186,7 @@ impl Registry {
         Self::default()
     }
 
-    pub fn enrol(&mut self, device: EnrolledDevice) -> &mut Self {
+    pub fn enroll(&mut self, device: EnrolledDevice) -> &mut Self {
         self.devices.insert(device.device_id.clone(), device);
         self
     }
@@ -175,7 +200,7 @@ impl Registry {
     pub fn from_roster(roster: &Roster) -> Result<Self, EnrollmentError> {
         let mut registry = Self::new();
         for record in &roster.records {
-            registry.enrol(EnrolledDevice::from_record(record)?);
+            registry.enroll(EnrolledDevice::from_record(record)?);
         }
         Ok(registry)
     }
@@ -254,6 +279,21 @@ pub struct VerifyPolicy {
     /// producing a production-valid approval.
     pub accept_test_keys: bool,
 
+    /// Which kinds of device may authorize something here.
+    ///
+    /// Defaults to `[signet, enclave]`, and the inclusion of `enclave` is the
+    /// product decision `spec/device-classes-v1.md` exists to make: an approval
+    /// from a biometric-gated enclave key is a real approval with a smaller
+    /// claim, not a demo. An operator who wants hardware only writes
+    /// `accept_classes = ["signet"]` and every verifier they run becomes
+    /// hardware-only, with nothing else to change.
+    ///
+    /// `test` is never in the default set. Listing it here is equivalent to
+    /// [`accept_test_keys`](Self::accept_test_keys), and neither is the other's
+    /// override: a test key counts if *either* says so, so a policy that meant
+    /// to refuse them has to be silent in both places.
+    pub accept_classes: Vec<DeviceClass>,
+
     /// Whether the threshold counts distinct **people** rather than distinct
     /// devices.
     ///
@@ -283,10 +323,21 @@ impl Default for VerifyPolicy {
         Self {
             required_signatures: 1,
             accept_test_keys: false,
+            accept_classes: vec![DeviceClass::Signet, DeviceClass::Enclave],
             require_distinct_operators: false,
             acceptance: Acceptance::Now,
             max_clock_skew_ms: None,
         }
+    }
+}
+
+impl VerifyPolicy {
+    /// Whether a device of this class may count toward the threshold.
+    pub fn accepts(&self, class: DeviceClass) -> bool {
+        if class.is_test() && self.accept_test_keys {
+            return true;
+        }
+        self.accept_classes.contains(&class)
     }
 }
 
@@ -379,6 +430,13 @@ pub enum VerifyError {
     UnknownDevice(String),
     /// A signature came from a published test key and policy forbids those.
     TestKeyRejected(String),
+    /// The signing device is of a class this verifier's policy does not
+    /// accept — typically an `enclave` approval reaching a hardware-only
+    /// verifier.
+    ClassRejected {
+        device_id: String,
+        class: DeviceClass,
+    },
     /// The signing device has been revoked.
     DeviceRevoked {
         device_id: String,
@@ -449,6 +507,11 @@ impl std::fmt::Display for VerifyError {
             TestKeyRejected(id) => write!(
                 f,
                 "device {id} is a published test key; production verification refuses these"
+            ),
+            ClassRejected { device_id, class } => write!(
+                f,
+                "device {device_id} is a {class}-class device, which this verifier's policy does \
+                 not accept"
             ),
             BadSignature(id) => write!(f, "signature from {id} did not verify"),
             HighS(id) => write!(f, "signature from {id} is not low-S"),
@@ -539,6 +602,10 @@ pub struct VerifiedSigner {
     pub device_id: String,
     /// The human the device is enrolled to, when the verifier knows.
     pub operator: Option<Operator>,
+    /// What kind of thing signed — so an audit view can show that as well as
+    /// who. A Signet and a phone are both approvals; they are not the same
+    /// approval.
+    pub class: DeviceClass,
     pub counter: u64,
     pub device_unix_ms: u64,
 }
@@ -682,8 +749,25 @@ pub fn verify_signatures(
             .get(&sig.device_id)
             .ok_or_else(|| VerifyError::UnknownDevice(sig.device_id.clone()))?;
 
-        if device.is_test_key && !policy.accept_test_keys {
-            return Err(VerifyError::TestKeyRejected(sig.device_id.clone()));
+        // The class check comes before the cryptography too, and before
+        // revocation: it is a statement about what the policy will listen to
+        // at all. A device that says it is a test key in *either* field is
+        // treated as one — the fields agree when built through this crate, and
+        // disagreement fails toward refusal.
+        let class = if device.is_test_key {
+            DeviceClass::Test
+        } else {
+            device.class
+        };
+        if !policy.accepts(class) {
+            return Err(if class.is_test() {
+                VerifyError::TestKeyRejected(sig.device_id.clone())
+            } else {
+                VerifyError::ClassRejected {
+                    device_id: sig.device_id.clone(),
+                    class,
+                }
+            });
         }
 
         // Revocation is checked before the cryptography, because a revoked
@@ -734,6 +818,7 @@ pub fn verify_signatures(
         counted.push(VerifiedSigner {
             device_id: sig.device_id.clone(),
             operator: device.operator.clone(),
+            class,
             counter: sig.counter,
             device_unix_ms: sig.device_unix_ms,
         });
@@ -897,7 +982,7 @@ mod tests {
     fn registry_with(devices: &[&EnrolledDevice]) -> Registry {
         let mut r = Registry::new();
         for d in devices {
-            r.enrol((*d).clone());
+            r.enroll((*d).clone());
         }
         r
     }
@@ -1044,6 +1129,73 @@ mod tests {
             None
         )
         .is_ok());
+    }
+
+    #[test]
+    fn an_enclave_device_is_accepted_by_default_and_refused_by_a_hardware_only_policy() {
+        // spec/device-classes-v1.md §5: the default includes `enclave`, and
+        // one line of config takes it back out.
+        let mut key = vec![0x04u8; 65];
+        key[64] = 9;
+        let d = EnrolledDevice::enclave(key);
+        assert_eq!(d.class, DeviceClass::Enclave);
+        assert!(!d.is_test_key);
+        let env = envelope(vec![sig_for(&d, 3)]);
+
+        let got = verify_bundle(
+            &env,
+            &registry_with(&[&d]),
+            &VerifyPolicy::default(),
+            &mut MemoryCounters::new(),
+            &AlwaysValid,
+            None,
+        )
+        .unwrap();
+        assert_eq!(got.signers[0].class, DeviceClass::Enclave);
+
+        let err = verify_bundle(
+            &env,
+            &registry_with(&[&d]),
+            &VerifyPolicy {
+                accept_classes: vec![DeviceClass::Signet],
+                ..Default::default()
+            },
+            &mut MemoryCounters::new(),
+            &AlwaysValid,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            VerifyError::ClassRejected {
+                device_id: d.device_id.clone(),
+                class: DeviceClass::Enclave,
+            }
+        );
+    }
+
+    #[test]
+    fn a_device_flagged_as_test_in_either_field_is_treated_as_one() {
+        // The constructors keep the two fields in step. A hand-built device
+        // that says "test" in only one of them fails toward refusal.
+        let by_flag = EnrolledDevice {
+            is_test_key: true,
+            ..device(1)
+        };
+        assert_eq!(by_flag.class, DeviceClass::Signet);
+        let err = verify_bundle(
+            &envelope(vec![sig_for(&by_flag, 1)]),
+            &registry_with(&[&by_flag]),
+            &VerifyPolicy::default(),
+            &mut MemoryCounters::new(),
+            &AlwaysValid,
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, VerifyError::TestKeyRejected(_)), "got {err:?}");
+
+        let by_class = device(2).with_class(DeviceClass::Test);
+        assert!(by_class.is_test_key, "with_class keeps the flag in step");
     }
 
     #[test]

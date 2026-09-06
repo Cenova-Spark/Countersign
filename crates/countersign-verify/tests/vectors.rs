@@ -85,7 +85,7 @@ fn test_key_registry() -> (Registry, String) {
     );
 
     let mut registry = Registry::new();
-    registry.enrol(device);
+    registry.enroll(device);
     (registry, id)
 }
 
@@ -408,4 +408,213 @@ fn a_registry_built_from_the_roster_verifies_the_approval_vector_end_to_end() {
     .expect("the roster's device should authorize its own approval");
 
     assert_eq!(verified.operators(), vec!["alice@example.com"]);
+}
+
+// ---------------------------------------------------------------------------
+// Device classes — spec/device-classes-v1.md
+// ---------------------------------------------------------------------------
+
+fn enclave_record() -> countersign_verify::EnrollmentRecord {
+    serde_json::from_value(load("device-classes.json")["record"].clone()).expect("record parses")
+}
+
+fn enclave_envelope() -> ApprovalEnvelope {
+    serde_json::from_value(load("device-classes.json")["approval"]["envelope"].clone())
+        .expect("envelope parses")
+}
+
+fn enclave_registry() -> Registry {
+    let mut registry = Registry::new();
+    registry.enroll(EnrolledDevice::from_record(&enclave_record()).expect("the record is consistent"));
+    registry
+}
+
+#[test]
+fn the_enclave_record_is_labelled_enclave_and_carries_its_proof() {
+    let record = enclave_record();
+    assert_eq!(record.class(), countersign_verify::DeviceClass::Enclave);
+    assert!(!record.is_test_key, "an enclave record is not a test key");
+    record
+        .verify_proof(&RustCryptoBackend)
+        .expect("the committed enclave proof must verify");
+    // And the file's id is the id derived from the key, or it describes a
+    // device that does not exist.
+    assert_eq!(
+        record.device_id,
+        load("device-classes.json")["enclave_key"]["device_id"]
+            .as_str()
+            .unwrap()
+    );
+}
+
+#[test]
+fn an_enclave_approval_verifies_under_a_default_policy() {
+    // The product decision, pinned: a biometric-gated enclave key is a real
+    // approval with a smaller claim, and a default verifier accepts it.
+    let verified = verify_bundle(
+        &enclave_envelope(),
+        &enclave_registry(),
+        &VerifyPolicy::default(),
+        &mut MemoryCounters::new(),
+        &RustCryptoBackend,
+        None,
+    )
+    .expect("the committed enclave approval must verify by default");
+
+    assert_eq!(verified.signers.len(), 1);
+    assert_eq!(
+        verified.signers[0].class,
+        countersign_verify::DeviceClass::Enclave,
+        "the result must say what kind of thing signed"
+    );
+    assert_eq!(verified.operators(), vec!["bob@example.com"]);
+}
+
+#[test]
+fn a_hardware_only_policy_refuses_the_same_approval() {
+    // The one-line way back. Nothing else about the verifier changes.
+    let err = verify_bundle(
+        &enclave_envelope(),
+        &enclave_registry(),
+        &VerifyPolicy {
+            accept_classes: vec![countersign_verify::DeviceClass::Signet],
+            ..Default::default()
+        },
+        &mut MemoryCounters::new(),
+        &RustCryptoBackend,
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerifyError::ClassRejected {
+                class: countersign_verify::DeviceClass::Enclave,
+                ..
+            }
+        ),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn the_class_comes_from_the_record_and_never_from_the_signature() {
+    // The same signature, enrolled under a different class, verifies under a
+    // different policy — because nothing in the bundle says what kind of
+    // device signed. A signer cannot promote itself.
+    let public = enclave_record().public_key().unwrap();
+    let mut as_signet = Registry::new();
+    as_signet.enroll(EnrolledDevice::new(public.clone()));
+    assert!(verify_bundle(
+        &enclave_envelope(),
+        &as_signet,
+        &VerifyPolicy {
+            accept_classes: vec![countersign_verify::DeviceClass::Signet],
+            ..Default::default()
+        },
+        &mut MemoryCounters::new(),
+        &RustCryptoBackend,
+        None,
+    )
+    .is_ok());
+
+    let mut as_test = Registry::new();
+    as_test.enroll(EnrolledDevice::test_key(public));
+    let err = verify_bundle(
+        &enclave_envelope(),
+        &as_test,
+        &VerifyPolicy::default(),
+        &mut MemoryCounters::new(),
+        &RustCryptoBackend,
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(err, VerifyError::TestKeyRejected(_)), "got {err:?}");
+}
+
+#[test]
+fn a_record_whose_class_and_test_flag_disagree_is_refused_whole() {
+    // One of the two fields is lying and a verifier cannot tell which.
+    let mut record = enclave_record();
+    record.is_test_key = true;
+
+    let err = EnrolledDevice::from_record(&record).unwrap_err();
+    assert!(
+        matches!(err, countersign_verify::EnrollmentError::ClassMismatch { .. }),
+        "got {err:?}"
+    );
+    let err = record.verify_proof(&RustCryptoBackend).unwrap_err();
+    assert!(
+        matches!(err, countersign_verify::EnrollmentError::ClassMismatch { .. }),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn an_enclave_record_stripped_of_its_proof_is_refused() {
+    // A roster may trim proofs for size — except here. The proof is the only
+    // evidence the key signs under a presence check at all.
+    let mut record = enclave_record();
+    record.proof = None;
+    assert_eq!(
+        EnrolledDevice::from_record(&record).unwrap_err(),
+        countersign_verify::EnrollmentError::EnclaveWithoutProof
+    );
+}
+
+#[test]
+fn a_record_issued_before_classes_existed_keeps_its_meaning() {
+    // enrollment.json predates the class field. Its record is a test key and
+    // must still read as one, with nothing re-issued.
+    let roster = signed_roster()
+        .verify(&authority_public_key(), &RustCryptoBackend)
+        .unwrap();
+    let record = &roster.records[0];
+    assert_eq!(record.class, None, "the legacy vector must stay class-less");
+    assert_eq!(record.class(), countersign_verify::DeviceClass::Test);
+    assert_eq!(
+        EnrolledDevice::from_record(record).unwrap().class,
+        countersign_verify::DeviceClass::Test
+    );
+}
+
+#[test]
+fn listing_test_in_accept_classes_is_the_same_as_accept_test_keys() {
+    let (registry, _) = test_key_registry();
+    let policy = VerifyPolicy {
+        accept_classes: vec![countersign_verify::DeviceClass::Test],
+        ..Default::default()
+    };
+    assert!(!policy.accept_test_keys, "the flag itself is still off");
+    verify_bundle(
+        &approval_envelope(),
+        &registry,
+        &policy,
+        &mut MemoryCounters::new(),
+        &RustCryptoBackend,
+        None,
+    )
+    .expect("either spelling admits a test key");
+}
+
+#[test]
+fn the_enclave_signing_payload_is_pinned() {
+    let doc = load("device-classes.json");
+    let envelope = enclave_envelope();
+    let sig = &envelope.bundle.signatures[0];
+    let built = countersign_verify::signing_payload(
+        &envelope.bundle.request_digest,
+        sig.counter,
+        sig.device_unix_ms,
+    )
+    .unwrap();
+    assert_eq!(
+        countersign_verify::encoding::hex_encode(&built),
+        doc["approval"]["signing_payload_hex"].as_str().unwrap()
+    );
+    assert_eq!(
+        countersign_verify::digest_of_json(&envelope.request_json).unwrap(),
+        envelope.bundle.request_digest,
+        "the vector's digest must cover its own request text"
+    );
 }

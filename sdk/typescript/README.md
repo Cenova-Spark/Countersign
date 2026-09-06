@@ -24,7 +24,7 @@ import {
   Registry, defaultPolicy, verifyForExecution, FileCounters, fingerprintUri,
 } from "@countersign/sdk";
 
-const registry = new Registry().enrol(devicePublicKey, {
+const registry = new Registry().enroll(devicePublicKey, {
   operator: { subject: "alice@example.com" },
 });
 
