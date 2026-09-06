@@ -17,21 +17,10 @@ rests on. This file is the state, not the plan.
 | M6 plugins screen, marketplace index, `countersign-tf` | **started 2026-09-05:** `signetd pack info`, `signetd pack new`, `templates/pack` | `cargo test -p signetd` (`packs::tests::info_*`, `scaffold`); `cargo test -p countersign-pack-template` |
 | M7 payment, App Store | not started | — |
 
-**Nothing above is committed.** It sits in the working tree alongside Elijah's
-own uncommitted relay work (`crates/signetd/src/relay.rs`, `web/`, and edits
-to `README.md`, `NEXT_STEPS.md`, the two specs). Commit that first, then the
-milestones, so the history reads in order. Suggested split:
-
-```
-1. relay work (Elijah's):  crates/signetd/src/relay.rs web/ crates/signetd/tests/fixtures/remote-approval.json README.md NEXT_STEPS.md spec/countersign-v1.md spec/enrollment-v1.md .gitignore Cargo.lock crates/countersign-hook crates/signetd/src/{daemon,device,lib,main}.rs crates/signetd/Cargo.toml
-2. M1:  crates/countersign-verify sdk/typescript spec/device-classes-v1.md spec/vectors/device-classes.json spec/README.md PRODUCT.md
-3. M2:  crates/countersign-pack crates/countersign-db crates/signetd crates/countersign-proxy/tests spec/pack-protocol-v1.md
-4. M3:  swift/CountersignKit crates/countersign-verify/tests/{swift_fixture.rs,fixtures/}
-5. M4:  swift/Signet HANDOFF.md CLAUDE.md
-```
-
-Step 1 and steps 3–4 both touch `crates/signetd/src/*.rs`; `git add -p` if the
-split matters, or squash 1 and 3.
+**Committed 2026-09-06**, in the order below with the relay and M2 squashed
+because they share `crates/signetd/src/*.rs`, the first-run fixes folded into
+M3 and M4, and the day's later work as three commits after them: M6's start,
+the fresh-start wipe, and the Developer ID signature. Every commit builds.
 
 ## What exists, by the thing M5 will touch
 
@@ -157,8 +146,11 @@ Entitlement and Stripe are **M7**, not M5.
 
 ## Decisions M5 needs from Elijah
 
-- Apple Developer Program team, bundle identifiers (`com.addisdb.signet` is
-  what the Mac app uses today), and an APNs key. Nothing pushes without them.
+- ~~Apple Developer Program team~~ — there is one: Developer ID Application
+  certificates for team `6T9YRXK82U` are in the login keychain on this Mac
+  (2026-09-05). Still needed: the bundle identifiers to settle on
+  (`com.addisdb.signet` is what the Mac app uses today) and an APNs key.
+  Nothing pushes without them.
 - Whether the hosted relay ever holds a plaintext payload (item 5 above).
 - **Simulator builds.** The iOS simulator has no Secure Enclave, so
   `EnclaveDevice` throws there and the app cannot approve. For UI work a
@@ -185,6 +177,10 @@ daemon wrote (`crates/signetd/src/wipe.rs` is the list) and refuses while a
 daemon listens; **Devices → Start over** in the Mac app stops its daemon, runs
 that, forgets the enclave key (`EnclaveDevice.reset`) and comes back with a
 new one. The relay's copy of a registered phone is not touched by either.
+
+**Verified 2026-09-05, end of the day:** every suite in `CLAUDE.md` green —
+422 Rust tests and clippy clean (with both wasm modules built, so nothing
+skipped), 32 TypeScript, 32 kit, 10 app, 22 relay.
 
 All four suites were green at handoff: 396 Rust tests, 32 TypeScript, 31 kit,
 8 app. Clippy clean. After M5 steps 1–2 (2026-09-05): Rust and clippy still
@@ -218,8 +214,13 @@ regenerated so the browser's signature carries `public_key_hex` and
   entitlement". Deciding per call, as it did until 2026-09-05, generated a
   fresh key on every launch, and the first human enrollment did not survive a
   relaunch. A rebuilt ad-hoc binary is a different app to the legacy
-  keychain, so expect a "Signet wants to use your confidential information"
-  prompt after a rebuild; Always Allow is the answer.
+  keychain and is asked "Signet wants to use your confidential information"
+  on every launch after a rebuild, so `build-app.sh` now signs with the
+  **Developer ID Application** identity in the login keychain (team
+  `6T9YRXK82U`, two certificates, both to Feb 2027) when it finds one, and
+  says so when it falls back to ad hoc. The designated requirement is then
+  the team and the bundle identifier, which a rebuild does not change; the
+  keychain asks once more after the switch and never again.
 - **`operator` is a Swift keyword.** The roster record's field is `owner` in
   Swift with a `CodingKeys` mapping; the wire stays `operator`.
 - **Tests that block the main actor deadlock the app code.** The fake daemon

@@ -1,13 +1,22 @@
 #!/bin/sh
 # Build Signet.app: the Swift executable, the daemon and its pack beside it,
-# an Info.plist that makes it a menu bar app, and an ad-hoc signature so the
-# Secure Enclave and the data-protection keychain will talk to it.
+# an Info.plist that makes it a menu bar app, and a code signature so the
+# Secure Enclave and the keychain will talk to it.
 #
 #   swift/Signet/build-app.sh            # debug
 #   swift/Signet/build-app.sh release    # release
 #
-# Distribution outside the App Store needs a Developer ID signature and
-# notarization in place of the ad-hoc step; nothing else here changes.
+# The signature is what makes a rebuilt app the same app to the keychain.
+# An ad-hoc signature identifies code by its hash, so every build is a
+# stranger and the login keychain asks "Signet wants to use your confidential
+# information" on each launch. A certificate-backed signature identifies the
+# team and the bundle identifier, which do not change. So: a "Developer ID
+# Application" identity from the login keychain when there is one, or the
+# one named in SIGNET_CODESIGN_IDENTITY (a name, or the SHA-1 from
+# `security find-identity -v -p codesigning`), and ad hoc only as a last
+# resort, said out loud.
+#
+# Distribution adds notarization on top; nothing else here changes.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -53,11 +62,28 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad hoc, with the hardened runtime, so the keychain and the enclave accept
-# the process. Replace `-` with a Developer ID identity to distribute.
-codesign --force --sign - --options runtime "$OUT/Contents/Helpers/signetd"
-codesign --force --sign - --options runtime "$OUT/Contents/Helpers/countersign-db"
-codesign --force --sign - --options runtime --identifier com.addisdb.signet "$OUT"
+# The identity: named, or the first Developer ID Application identity the
+# keychain holds (any certificate of the same team is the same identity to
+# the keychain), or ad hoc. The SHA-1 is used rather than the name, because
+# two certificates can share a name and codesign refuses to guess.
+if [ -n "${SIGNET_CODESIGN_IDENTITY:-}" ]; then
+  IDENTITY=$SIGNET_CODESIGN_IDENTITY
+else
+  IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+    | awk '/"Developer ID Application:/ { print $2; exit }')
+fi
+if [ -n "$IDENTITY" ]; then
+  echo "signing as $(security find-identity -v -p codesigning | awk -v h="$IDENTITY" '$2 == h || index($0, h) { sub(/^[^"]*"/, ""); sub(/"[^"]*$/, ""); print; exit }')"
+else
+  IDENTITY=-
+  echo "signing ad hoc: no Developer ID Application identity in the keychain, and SIGNET_CODESIGN_IDENTITY is unset."
+  echo "Every rebuild will be a new app to the keychain, and it will ask on each launch."
+fi
+
+# The hardened runtime, so the keychain and the enclave accept the process.
+codesign --force --sign "$IDENTITY" --options runtime "$OUT/Contents/Helpers/signetd"
+codesign --force --sign "$IDENTITY" --options runtime "$OUT/Contents/Helpers/countersign-db"
+codesign --force --sign "$IDENTITY" --options runtime --identifier com.addisdb.signet "$OUT"
 
 echo "built $OUT"
 echo "run with:  open $OUT"
