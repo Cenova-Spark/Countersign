@@ -26,7 +26,11 @@
 //! assert_eq!(verdict.reversible, Some(false));
 //! ```
 
-#![forbid(unsafe_code)]
+// `deny` rather than `forbid`, for exactly one reason: the WebAssembly export
+// glue at the bottom of this file needs four lines of `unsafe` to hand buffers
+// across the module boundary, and `forbid` cannot be lifted for a single
+// module. Nothing else in this crate may use it.
+#![deny(unsafe_code)]
 
 pub mod blast;
 
@@ -34,6 +38,17 @@ use countersign_pack::{ClassifyRequest, ClassifyResponse, Pack, PackInfo, Render
 use serde_json::json;
 
 pub use blast::{assess, Assessment, StatementAssessment};
+
+// The WebAssembly build. `cargo build -p countersign-db --target
+// wasm32-unknown-unknown --release` produces a module with an empty import
+// section that a host drives through `countersign_pack::wasm`; this is the pack
+// the marketplace distributes. The `unsafe` the ABI needs expands here, in this
+// crate, where a reader can see it — see `countersign_pack::wasm`.
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)]
+mod wasm_exports {
+    countersign_pack::export_pack!(super::DbPack);
+}
 
 /// How many statements of a batch get their own line on the device before the
 /// rest collapse into a count.

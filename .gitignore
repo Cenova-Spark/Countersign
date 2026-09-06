@@ -4,3 +4,10 @@
 
 # The file-delete gate is opt-in. See crates/countersign-hook/README.md.
 .claude/settings.local.json
+
+# The web app.
+node_modules/
+web/dist/
+.vercel/
+.env
+.env.local

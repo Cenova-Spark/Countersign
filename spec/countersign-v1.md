@@ -193,6 +193,35 @@ went backwards is a compromised device.
 A verifier that keeps per-device state MUST reject a `counter` less than or
 equal to the highest it has already accepted from that `device_id`.
 
+### 4.2 The device id
+
+```
+device_id = lowercase_hex(SHA-256(0x04 || X || Y))
+```
+
+`device_id` is the SHA-256 of the **SEC1 uncompressed** public key — the 65-byte
+encoding `0x04 || X || Y`, hashed as raw bytes and not as its hex form.
+
+It is pinned here, beside the signature encoding, because this is where a
+firmware author looks, and because two plausible readings each produce a
+`device_id` that matches nothing:
+
+- **The compressed point.** Many libraries' default SEC1 encoder emits the
+  33-byte compressed form, `0x02`/`0x03 || X`. RustCrypto, Go and WebCrypto all
+  offer both encodings and do not agree on which is the default.
+- **The bare coordinates.** Secure elements commonly return a public key as a
+  64-byte `X || Y` with no prefix — the ATECC608 family does. **The `0x04` MUST
+  be prepended before hashing.**
+
+Both mistakes are silent. Enrollment succeeds, every subsequent lookup misses,
+and it presents as a broken trust root rather than as an encoding error.
+
+`vectors/test-key.json` is the conformance case: hashing its
+`public_key_sec1_uncompressed_hex` MUST yield its `device_id`.
+
+`device_id` MUST be derived and re-derived from the key, never trusted as
+asserted — see `enrollment-v1.md` §3 for why.
+
 ---
 
 ## 5. The response bundle
@@ -204,7 +233,7 @@ equal to the highest it has already accepted from that `device_id`.
   "request_digest": "<lowercase hex>",
   "signatures": [
     {
-      "device_id": "<lowercase hex SHA-256 of the SEC1 uncompressed public key>",
+      "device_id": "<lowercase hex SHA-256 of the SEC1 uncompressed public key, §4.2>",
       "counter": 41235,
       "device_unix_ms": 1755859200123,
       "signature": "<base64url unpadded, r||s>",
@@ -355,7 +384,7 @@ human** — not queued, not shown, not turned into a prompt.
 This is the rule that survives an ecosystem of thousands of packs. Anyone may
 write `countersign-spotify`; nobody can make it light up a dial, because
 enabling a namespace is a local configuration decision and the default set is
-empty. A plugin cannot enrol itself into the operator's attention.
+empty. A plugin cannot enroll itself into the operator's attention.
 
 Note the asymmetry with §2.1's unknown *target*, which is treated as
 **production** — strictest. An unknown *action* is treated as **not our
@@ -367,21 +396,51 @@ attention on it.
 
 ### 6.2.3 A payload must be readable before it is approvable
 
-Firmware MUST NOT accept an actuation until the payload has been displayed for a
-minimum interval, and any new payload MUST restart that interval.
+Two requirements, and firmware MUST hold both. They defend the same thing from
+different sides, and the first does not achieve it alone.
+
+**The arm delay.** Firmware MUST NOT accept an actuation until the payload has
+been displayed for a minimum interval, and any new payload MUST restart that
+interval. *Displayed* means rendering has completed: the interval runs from the
+last byte written to the screen, not from the arrival of the payload, because
+the gap between those two is precisely the time the payload was not readable.
 
 An actuation that lands 80 ms after a screen appears is a reflex, not a
-decision. Restarting on every new payload is what stops a request timed to
-arrive mid-gesture from borrowing a movement that was meant for something else.
+decision.
 
 The interval SHOULD scale with severity — friction is worth spending where it
 buys something. The reference daemon uses 400 ms at the low end and 2 s for
 anything destructive.
 
-**This is not an anti-automation measure and MUST NOT be presented as one.** A
-servo waits as long as you like. It defends a cooperating human against their
-own reflexes, which is the actual threat model (§1), and it is worthless against
-an adversary with physical possession of the device — as everything here is.
+**The rest transition.** Firmware MUST observe the actuator at rest *after* the
+payload was displayed, before it will accept an approving actuation. An
+actuation already in progress when the payload appeared MUST NOT be able to
+satisfy §6.3.4 without first returning to rest.
+
+The arm delay does not give you this, and that is why it is stated separately.
+Elapsed time passes whether or not anyone moves. An operator still holding the
+dial past its detent when the next payload renders — the ordinary case, because
+the previous request has just committed and the hand has not returned yet —
+satisfies a 2 s arm delay and then a 5 s hold without having moved at all after
+seeing what was on the screen. Restarting the interval on a new payload does not
+close that, because nothing in the interval requires the hand to have done
+anything.
+
+Requiring a return to rest closes it, and it closes it in the direction the
+mechanism already goes: a spring-returned actuator is at rest whenever it is not
+being held, so the rule costs a compliant operator nothing and cannot be
+satisfied by inattention.
+
+It also removes a single-component failure. An angle sensor that fails stuck
+past its threshold, combined with an arm delay that elapses on its own, would
+otherwise produce an approval with no actuation at all. A stuck sensor cannot
+produce a rest transition.
+
+**Neither of these is an anti-automation measure and they MUST NOT be presented
+as such.** A servo waits as long as you like and returns to rest as often as you
+ask. They defend a cooperating human against their own reflexes, which is the
+actual threat model (§1), and they are worthless against an adversary with
+physical possession of the device — as everything here is.
 
 ### 6.2.4 The corollary: never ask when you do not need to
 
@@ -438,7 +497,7 @@ them to distinguish two gestures on the same control is asking precisely the
 thing they are currently bad at. A different organ cannot be confused by a hand
 moving on autopilot.
 
-It also keeps §5.2 intact: the dial has exactly one meaning, so a mis-turn stays
+It also keeps §6.2.1 intact: the dial has exactly one meaning, so a mis-turn stays
 a no-op rather than becoming an acknowledgement that clears the way for the next
 one.
 
@@ -448,16 +507,24 @@ The approving actuation MUST be sustained before the detent commits, and the
 duration SHOULD scale with severity. The reference daemon uses 300 ms at the low
 end and **5 s for anything destructive**.
 
-This is distinct from the arm delay in §6.2.3, and the distinction is the point:
+The hold MUST begin from the rest transition required by §6.2.3. Time spent in a
+position the actuator already occupied when the payload appeared does not count
+toward it, and firmware MUST discard an accumulated hold if engagement lapses
+before the duration is met.
+
+This is distinct from the two requirements in §6.2.3, and the three distinctions
+are the point:
 
 | | What it measures | What it defends |
 |---|---|---|
-| Arm delay | Elapsed time since the payload appeared | You cannot approve what you have not had time to read |
+| Arm delay | Elapsed time since the payload finished rendering | You cannot approve what you have not had time to read |
+| Rest transition | That the actuator returned to rest after the payload appeared | You cannot approve with a movement that began before the payload existed |
 | Hold | Continuous engagement during the actuation | You cannot approve something while reaching for something else |
 
 Elapsed time can be spent looking away. A hold cannot — your hand is on the
 device for all of it, which is awkward to do by accident and impossible to do
-absent-mindedly for five seconds.
+absent-mindedly for five seconds. Neither one establishes that the hand moved at
+all once the payload was on screen; only the rest transition does that.
 
 ### 6.3.5 What this does not do
 

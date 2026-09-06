@@ -1,0 +1,28 @@
+{
+  "name": "signet-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "signet.addisdb.com — remote countersignature. Approve a pending request from a phone when you are away from the desk.",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "vite",
+    "dev:api": "SIGNET_DEV_RELAY=1 node scripts/dev-api.mjs",
+    "chassis": "node scripts/build-chassis.mjs",
+    "vectors": "node scripts/gen-remote-vector.mjs",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.34.3",
+    "@workos-inc/node": "^10.7.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.0.5"
+  }
+}

@@ -90,6 +90,7 @@ SQL is. All database intelligence lives in an optional pack, which is why
 | [`countersign-proxy`](crates/countersign-proxy) | **Posture C.** A PostgreSQL wire proxy that refuses statements nobody countersigned. No agent integration at all. |
 | [`countersign-hook`](crates/countersign-hook) | A Claude Code `PreToolUse` gate. Deleting a file takes a countersignature; creating one takes nothing. How to try the protocol without a database. |
 | [`sdk/typescript`](sdk/typescript) | Verify approvals and request them, from Node. Zero dependencies, no build step, checked against the same vectors as Rust. |
+| [`web`](web) | **The relay, and a Signet you are not sitting in front of.** Approve a pending request from a phone, with the same payload, the same digest and the same hold. The browser page signs with a published test key — see below; a phone registers its enclave key and is enrolled by the daemon. |
 
 Specs live in [`spec/`](spec/), with machine-readable test vectors in
 [`spec/vectors/`](spec/vectors/) — including a **published** test keypair whose
@@ -104,7 +105,9 @@ Try it end to end, with no hardware, in two terminals — see
 
 ### What is not here yet
 
-Client integrations, the cloud-agent relay, and the firmware. Everything still
+Client integrations and the firmware. The relay now exists in the direction that
+serves a human away from their desk ([`web`](web)); serving a *cloud agent* with
+no local presence is the other half and is not built. Everything still
 outstanding — including what the offline build constrained — is in
 [NEXT_STEPS.md](NEXT_STEPS.md).
 
@@ -188,8 +191,9 @@ coverage.** Do not confuse the two.
 
 ## Testing without building a bypass
 
-There is no mouse-driven approval path, and there will not be one — a software
-confirmation is the thing this product exists to replace.
+**No software path produces a production-valid signature.** That is the rule, it
+has not moved, and §9 states it as a non-goal so it is not re-litigated later by
+whoever has the most revenue attached to the request.
 
 The mock device signs with a **published** test keypair whose private half is in
 [`spec/vectors/test-key.json`](spec/vectors/test-key.json). Verifiers reject test-key
@@ -199,6 +203,35 @@ That is the whole safety mechanism, and it is worth stating plainly: a mock
 accidentally left enabled in a real deployment **fails loudly at verification
 rather than silently passing.** The bypass is not "disabled by a flag" — it is
 cryptographically incapable of producing a production-valid approval.
+
+### The remote path, and why it is not the exception
+
+[`web`](web) lets a phone answer a request when nobody is at the desk, and a
+thumb on a phone is plainly a software confirmation. So the distinction has to
+be exact rather than convenient.
+
+It signs with a **second published test key**, derived like the mock's and
+different from it so the two do not collide on `device_id`. Everything it
+produces is refused by a default verifier, by the same mechanism and for the
+same reason. The rule at the top of this section is intact.
+
+What it is, is a **second device class, weaker than a Signet and honest about
+it.** A Signet has a screen the requesting software does not control; a phone
+runs a general-purpose OS. The claim is correspondingly smaller, and no document
+here pretends otherwise.
+
+If a phone is ever to make a real approval it will be with a non-extractable key
+in a secure enclave, unlocked per signature, enrolled as its own device class
+with its weaker claim written into the spec. **That is a spec change, not a code
+change**, and nothing in `web/` presumes it.
+
+Everything else carries over exactly: the arm delay measured from paint, the
+rest transition, the severity-scaled hold, the acknowledgement on a different
+organ from the dial, low-S normalization, the monotonic counter, and rendering
+from the bytes that get signed. That last one does double duty off-host — the
+phone recomputes the digest from the request's own bytes and refuses to render
+anything that disagrees, which is what stops an untrusted relay from turning a
+`SELECT 1` into a `DROP TABLE`.
 
 ---
 
@@ -237,7 +270,7 @@ cable.
 7. ~~Reference Postgres proxy — the coverage story, and the first posture-C artifact~~ ✅
 8. ~~TS SDK~~ ✅ · local HTTP/WS
 9. Client integrations at whichever execution chokepoint each one has
-10. Relay for cloud agents
+10. ~~Relay — a Signet you are not sitting in front of~~ ✅ · cloud agents next
 11. Swap mock for hardware
 
 Steps 8–10 are entirely independent of hardware progress.

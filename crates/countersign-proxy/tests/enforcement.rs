@@ -352,7 +352,7 @@ uri_fingerprints = ["{}"]
 
     let path = socket.clone();
     std::thread::spawn(move || {
-        let _ = signetd::service::serve(daemon, std::path::Path::new(&path), None);
+        let _ = signetd::service::serve(daemon, std::path::Path::new(&path), None, None);
     });
     settle();
     socket

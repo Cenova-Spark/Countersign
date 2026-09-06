@@ -241,3 +241,59 @@ fn main() -> std::io::Result<()> { run_stdio(&MyPack) }
 
 In any other language, implement §2 and §3 directly. The protocol is two methods
 and one response shape; that is deliberate, and it is the size it needs to stay.
+
+---
+
+## 8. WebAssembly packs
+
+§5 says hosts SHOULD sandbox packs. This section is how a pack ships so that
+the sandbox is not something a host grants but something the pack cannot ask
+its way out of.
+
+A WebAssembly pack is a module with an **empty import section**. Not a WASI
+command with no capabilities: a module that cannot name a syscall. No network,
+no filesystem, no clock, no environment — because there is nothing to import
+them through. A host MUST refuse to instantiate a module that imports anything.
+
+### 8.1 The messages do not change
+
+The host still sends the JSON-RPC messages in §3, one per call, and still
+receives one response per message. What changes is where the bytes go: into
+the module's linear memory, through four exports, rather than into a pipe.
+
+```text
+memory                                 the module's linear memory
+countersign_alloc(len: u32) -> u32      reserve `len` bytes; returns a pointer
+countersign_call(ptr: u32, len: u32) -> u64
+                                        one request line in; `(ptr << 32) | len`
+                                        of one response line out. The module
+                                        takes ownership of the request buffer.
+countersign_free(ptr: u32, len: u32)   release a response buffer
+```
+
+A `describe` or `classify` over this transport MUST produce the byte-identical
+response it would over stdio. The Rust harness's `handle_line` answers both,
+and `countersign_pack::export_pack!` emits the four exports around any `Pack`
+implementation; other languages implement §2 and §3 and the four exports.
+
+### 8.2 What the host bounds
+
+A module that imports nothing can still loop forever or grow without limit. A
+host MUST meter each call in **fuel** — a deterministic instruction budget,
+the same on every machine — and MUST cap the module's linear memory. Exhausting
+either is a §4.3 failure: `critical`, with the cause named, never a hang and
+never "probably fine". The reference host grants 500 million units per call and
+64 MiB of memory.
+
+### 8.3 What a marketplace distributes
+
+Only this. A native executable that sees production statements has every
+capability the operating system gives it, and a public directory of those is
+an exfiltration channel with a storefront. Native packs remain fully supported
+on an operator's own machine, installed by hand, and are never listed.
+
+A plugin's manifest (`countersign-plugin.json`) names the module, pins its
+SHA-256, and lists the namespaces `describe` will claim. A host checks the hash
+**every time it starts the pack**, not only at install — a plugin directory is
+ordinary files, and a classifier swapped under a good manifest is exactly the
+thing that check exists to notice.

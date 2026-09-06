@@ -43,6 +43,9 @@ pub enum PackFailure {
     ForbiddenRole(String),
     /// The pack claims a protocol this host does not speak.
     ProtocolMismatch { got: u32, want: u32 },
+    /// A WebAssembly pack ran out of fuel — the deterministic form of a
+    /// timeout. An infinite loop, or a statement too large to classify.
+    Exhausted { fuel: u64 },
 }
 
 impl std::fmt::Display for PackFailure {
@@ -70,6 +73,11 @@ impl std::fmt::Display for PackFailure {
             ProtocolMismatch { got, want } => {
                 write!(f, "pack speaks protocol {got}, this host speaks {want}")
             }
+            Exhausted { fuel } => write!(
+                f,
+                "pack ran out of fuel ({fuel} units) before answering — a loop, or a statement \
+                 too large to classify"
+            ),
         }
     }
 }
@@ -91,6 +99,11 @@ pub struct HostConfig {
     /// statement does, and the safe reading of "I don't know" is not "probably
     /// fine".
     pub severity_on_failure: Severity,
+
+    /// Fuel granted to each call of a WebAssembly pack — the deterministic
+    /// counterpart of `timeout`, which cannot interrupt an interpreter loop
+    /// from outside. Ignored for process-backed packs.
+    pub fuel_per_call: u64,
 }
 
 impl Default for HostConfig {
@@ -98,6 +111,33 @@ impl Default for HostConfig {
         Self {
             timeout: Duration::from_secs(2),
             severity_on_failure: Severity::Critical,
+            fuel_per_call: 500_000_000,
+        }
+    }
+}
+
+/// How the host reaches a pack.
+enum Transport {
+    /// A subprocess speaking line-delimited JSON-RPC on its stdio.
+    Process {
+        child: Child,
+        stdin: ChildStdin,
+        lines: Receiver<std::io::Result<String>>,
+    },
+    /// A WebAssembly module with no imports, driven one line at a time
+    /// through `crate::wasm`'s exports.
+    #[cfg(feature = "wasm-host")]
+    Wasm(Box<crate::wasm_host::WasmPack>),
+}
+
+impl std::fmt::Debug for Transport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Transport::Process { child, .. } => {
+                f.debug_struct("Process").field("pid", &child.id()).finish()
+            }
+            #[cfg(feature = "wasm-host")]
+            Transport::Wasm(pack) => f.debug_tuple("Wasm").field(pack).finish(),
         }
     }
 }
@@ -122,18 +162,31 @@ impl Classified {
     }
 }
 
-/// A running pack subprocess.
+/// A running pack — a subprocess, or an instantiated WebAssembly module.
+///
+/// The two are the same thing to everyone above this struct: the protocol is
+/// identical, the rules in §4 are enforced identically, and a caller cannot
+/// tell which it has. Only the sandbox differs, and it differs completely.
 #[derive(Debug)]
 pub struct PackHost {
-    child: Child,
-    stdin: ChildStdin,
-    lines: Receiver<std::io::Result<String>>,
+    transport: Transport,
     info: PackInfo,
     config: HostConfig,
     next_id: u64,
 }
 
 impl PackHost {
+    /// Instantiate a WebAssembly pack and complete its `describe` handshake.
+    ///
+    /// The module must import nothing; see `crate::wasm_host`. This is the form
+    /// a marketplace distributes, because it is the form that cannot phone
+    /// home with the statement it was handed.
+    #[cfg(feature = "wasm-host")]
+    pub fn spawn_wasm(bytes: &[u8], config: HostConfig) -> Result<Self, PackFailure> {
+        let pack = crate::wasm_host::WasmPack::instantiate(bytes, config.fuel_per_call)?;
+        Self::handshake(Transport::Wasm(Box::new(pack)), config)
+    }
+
     /// Start a pack and complete its `describe` handshake.
     pub fn spawn(mut command: Command, config: HostConfig) -> Result<Self, PackFailure> {
         command.stdin(Stdio::piped()).stdout(Stdio::piped());
@@ -164,10 +217,19 @@ impl PackHost {
             }
         });
 
+        Self::handshake(
+            Transport::Process {
+                child,
+                stdin,
+                lines,
+            },
+            config,
+        )
+    }
+
+    fn handshake(transport: Transport, config: HostConfig) -> Result<Self, PackFailure> {
         let mut host = Self {
-            child,
-            stdin,
-            lines,
+            transport,
             info: PackInfo {
                 name: String::new(),
                 version: String::new(),
@@ -246,60 +308,91 @@ impl PackHost {
 
         let line = serde_json::to_string(&RpcRequest::new(id, method, params))
             .map_err(|e| PackFailure::Malformed(e.to_string()))?;
-        writeln!(self.stdin, "{line}").map_err(|e| PackFailure::Crashed(e.to_string()))?;
-        self.stdin
-            .flush()
-            .map_err(|e| PackFailure::Crashed(e.to_string()))?;
 
-        let deadline = Instant::now() + self.config.timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            let line = match self.lines.recv_timeout(remaining) {
-                Ok(Ok(l)) => l,
-                Ok(Err(e)) => return Err(PackFailure::Crashed(e.to_string())),
-                Err(RecvTimeoutError::Timeout) => {
-                    return Err(PackFailure::Timeout(self.config.timeout))
+        match &mut self.transport {
+            #[cfg(feature = "wasm-host")]
+            Transport::Wasm(pack) => {
+                // One line in, one line out, and the fuel meter is the
+                // timeout. No pipe, so no late answers to skip past.
+                let answer = pack.call_line(&line)?;
+                let response: RpcResponse = serde_json::from_str(&answer)
+                    .map_err(|e| PackFailure::Malformed(e.to_string()))?;
+                Self::unwrap_response(response, id)
+            }
+            Transport::Process {
+                stdin,
+                lines,
+                ..
+            } => {
+                writeln!(stdin, "{line}").map_err(|e| PackFailure::Crashed(e.to_string()))?;
+                stdin
+                    .flush()
+                    .map_err(|e| PackFailure::Crashed(e.to_string()))?;
+
+                let deadline = Instant::now() + self.config.timeout;
+                loop {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    let line = match lines.recv_timeout(remaining) {
+                        Ok(Ok(l)) => l,
+                        Ok(Err(e)) => return Err(PackFailure::Crashed(e.to_string())),
+                        Err(RecvTimeoutError::Timeout) => {
+                            return Err(PackFailure::Timeout(self.config.timeout))
+                        }
+                        Err(RecvTimeoutError::Disconnected) => {
+                            return Err(PackFailure::Crashed("pack closed its output".into()))
+                        }
+                    };
+
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+
+                    let response: RpcResponse = match serde_json::from_str(&line) {
+                        Ok(r) => r,
+                        Err(e) => return Err(PackFailure::Malformed(e.to_string())),
+                    };
+
+                    // A late answer to a timed-out call is still in the pipe.
+                    // Matching on id drops it instead of handing it back as the
+                    // answer to a different question.
+                    if response.id != id {
+                        continue;
+                    }
+
+                    return Self::unwrap_response(response, id);
                 }
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err(PackFailure::Crashed("pack closed its output".into()))
-                }
-            };
-
-            if line.trim().is_empty() {
-                continue;
             }
+        }
+    }
 
-            let response: RpcResponse = match serde_json::from_str(&line) {
-                Ok(r) => r,
-                Err(e) => return Err(PackFailure::Malformed(e.to_string())),
-            };
-
-            // A late answer to a timed-out call is still in the pipe. Matching
-            // on id drops it instead of handing it back as the answer to a
-            // different question.
-            if response.id != id {
-                continue;
-            }
-
-            if let Some(err) = response.error {
-                return Err(PackFailure::Rpc {
-                    code: err.code,
-                    message: err.message,
-                });
-            }
-            return response.result.ok_or_else(|| {
-                PackFailure::Malformed("response had neither result nor error".into())
+    fn unwrap_response(response: RpcResponse, id: u64) -> Result<Value, PackFailure> {
+        if response.id != id {
+            return Err(PackFailure::Malformed(format!(
+                "response answered id {} to a call with id {id}",
+                response.id
+            )));
+        }
+        if let Some(err) = response.error {
+            return Err(PackFailure::Rpc {
+                code: err.code,
+                message: err.message,
             });
         }
+        response
+            .result
+            .ok_or_else(|| PackFailure::Malformed("response had neither result nor error".into()))
     }
 }
 
 impl Drop for PackHost {
     fn drop(&mut self) {
         // Closing stdin ends `run_stdio`'s loop; kill covers a pack that ignores
-        // EOF. Neither is allowed to fail loudly in a destructor.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // EOF. Neither is allowed to fail loudly in a destructor. A wasm module
+        // has no process to end; dropping the store is enough.
+        if let Transport::Process { child, .. } = &mut self.transport {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 

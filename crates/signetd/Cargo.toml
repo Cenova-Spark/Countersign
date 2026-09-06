@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 countersign-audit = { path = "../countersign-audit", version = "0.1.0" }
-countersign-pack = { path = "../countersign-pack", version = "0.1.0" }
+countersign-pack = { path = "../countersign-pack", version = "0.1.0", features = ["wasm-host", "manifest"] }
 countersign-verify = { path = "../countersign-verify", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -21,3 +21,9 @@ sha2 = { workspace = true }
 toml = "0.9"
 getrandom = "0.3"
 p256 = { version = "0.14.0-rc.10", default-features = false, features = ["ecdsa", "alloc"] }
+# Blocking HTTP, for the relay device only. `Device::present` is a blocking
+# call by design, so an async runtime here would buy nothing and cost a great
+# deal. signetd is a client of the relay and never a server to it, so no HTTP
+# server dependency is implied — see NEXT_STEPS §1.1, which is about a
+# different transport entirely.
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }

@@ -59,6 +59,12 @@ pub mod host;
 pub mod rpc;
 pub mod serve;
 pub mod types;
+pub mod wasm;
+
+#[cfg(feature = "manifest")]
+pub mod manifest;
+#[cfg(feature = "wasm-host")]
+pub mod wasm_host;
 
 pub use host::{fallback, validate, Classified, HostConfig, PackFailure, PackHost};
 pub use serve::{handle_line, run_stdio, Pack};
@@ -66,3 +72,8 @@ pub use types::{
     namespace_of, ClassifyRequest, ClassifyResponse, PackInfo, RenderLine, RenderRole, Severity,
     TargetRef, PROTOCOL,
 };
+
+#[cfg(feature = "manifest")]
+pub use manifest::{ArtifactKind, Manifest, ManifestError, PackArtifact};
+#[cfg(feature = "wasm-host")]
+pub use wasm_host::{WasmPack, DEFAULT_FUEL_PER_CALL};

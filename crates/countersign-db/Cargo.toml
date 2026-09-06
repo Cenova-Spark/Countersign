@@ -7,6 +7,13 @@ license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 
+# `cdylib` is for the WebAssembly build — `cargo build -p countersign-db
+# --target wasm32-unknown-unknown` — which is how the marketplace distributes
+# this pack. The module imports nothing, so it cannot reach a network or a
+# filesystem however it is hosted. See `countersign_pack::wasm`.
+[lib]
+crate-type = ["rlib", "cdylib"]
+
 [[bin]]
 name = "countersign-db"
 path = "src/main.rs"

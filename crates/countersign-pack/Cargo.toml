@@ -10,3 +10,13 @@ authors.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true, optional = true }
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "portable-dispatch"], optional = true }
+
+[features]
+# Host WebAssembly packs — the form the marketplace distributes. Optional so a
+# pack author linking this crate for the trait and the stdio harness does not
+# pull an interpreter in with it.
+wasm-host = ["dep:wasmi"]
+# Read and check plugin manifests, including the artifact hash.
+manifest = ["dep:sha2"]

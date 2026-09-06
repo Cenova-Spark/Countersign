@@ -32,7 +32,7 @@ use std::time::Instant;
 
 use countersign_pack::RenderRole;
 
-use crate::device::{Device, DeviceInfo, DeviceOutcome, MockDevice, Presentation};
+use crate::device::{Cancel, Device, DeviceInfo, DeviceOutcome, MockDevice, Presentation};
 
 /// A mock that asks the operator on the daemon's own terminal.
 pub struct InteractiveDevice {
@@ -59,7 +59,7 @@ impl Device for InteractiveDevice {
         self.inner.info()
     }
 
-    fn present(&mut self, presentation: &Presentation) -> DeviceOutcome {
+    fn present(&mut self, presentation: &Presentation, cancel: &Cancel) -> DeviceOutcome {
         // Everything is drawn on stderr: stdout may be a transport, and a
         // prompt written into a JSON-RPC stream corrupts it.
         let mut out = std::io::stderr();
@@ -158,14 +158,16 @@ impl Device for InteractiveDevice {
 
         // Delegate the signing itself, so there is exactly one place in this
         // codebase that turns a decision into a signature.
-        match self.inner.present(presentation) {
+        match self.inner.present(presentation, cancel) {
             DeviceOutcome::Approved {
+                device_id,
                 counter,
                 device_unix_ms,
                 signature,
                 ..
             } => {
                 DeviceOutcome::Approved {
+                    device_id,
                     counter,
                     device_unix_ms,
                     signature,

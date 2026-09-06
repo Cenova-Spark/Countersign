@@ -103,9 +103,13 @@ Still outstanding on what does exist:
 - **Long-polling, not WebSocket.** Serverless functions cannot hold a socket, so
   the daemon polls a call that holds for ~9 s. Fine for a demo, and the wrong
   shape for a fleet.
-- **The relay trusts its own pairing table for `device_id`.** It should learn
-  keys from a signed roster like everything else — the same gap as §3's note
-  about the proxy's hardcoded registry, and the same fix.
+- ~~**The relay trusts its own pairing table for `device_id`.**~~ A phone now
+  registers its enclave key (`web/api/phones.js`) and a signature says what
+  signed it; the daemon verifies a phone against **its own roster** and the
+  browser page against the derived test key, believing the relay about neither
+  (`crates/signetd/src/relay.rs`). What remains is the *roster* trust model —
+  a signed roster from an authority key, for teams — which is enrollment spec
+  §7 and the same gap as §3's note about the proxy's hardcoded registry.
 - **The dev store is in process memory.** It exists so the loop can be run on
   one machine without an account, behind two locks. It is not a smaller Redis.
 
@@ -219,7 +223,7 @@ non-statement protocol after it.
   `signetd audit export --disclosure=digests-only` are the obvious pair.
 - **Enrollment has no CLI.** `spec/enrollment-v1.md` §2 describes the ceremony
   and `countersign-verify` implements every check, but nothing runs it.
-  `signetd enrol --subject alice@example.com` is the missing piece, and without
+  `signetd enroll --subject alice@example.com` is the missing piece, and without
   it the trust root is theory.
 - **The proxy's registry is hardcoded to the test key.** It should load a signed
   roster and trust one authority key configured out of band. `countersign-hook`

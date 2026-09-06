@@ -24,15 +24,19 @@ use countersign_pack::{
     Classified, ClassifyRequest, PackHost, RenderLine, RenderRole, Severity, TargetRef,
 };
 use countersign_verify::{
-    digest_display, encoding::b64url_encode, fingerprint_uri, ApprovalEnvelope, Bundle, Decision,
-    Request, Requester, VERSION,
+    digest_display, encoding::b64url_encode, enrollment_statement, fingerprint_uri,
+    ApprovalEnvelope, Bundle, Decision, EnrollmentRecord, Operator, Request, Requester,
+    ENROLLMENT_ACTION, VERSION,
 };
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
+use std::sync::{Arc, Mutex};
 use serde_json::Value;
 
 use crate::audit::{AuditStore, StoreError};
 use crate::config::Config;
-use crate::device::{now_unix_ms, Device, DeviceOutcome, Presentation};
+use crate::device::{now_unix_ms, Cancel, Device, DeviceOutcome, Presentation};
+use crate::roster::LocalRoster;
 use crate::policy::{self, Evaluation, Outcome};
 
 /// What a client asks for.
@@ -157,6 +161,18 @@ pub struct Daemon {
     device: Box<dyn Device>,
     packs: Vec<PackHost>,
     audit: AuditStore,
+    /// Namespace → pack name, for packs that are installed and switched off.
+    ///
+    /// A request in one of these is refused without a human being asked. Not
+    /// shown verbatim at the tier floor, which is what a namespace *nobody*
+    /// claims gets: here somebody claims it and the operator turned them off,
+    /// and "off" has to mean the dial stays dark. See `crate::packs`.
+    off_namespaces: std::collections::BTreeMap<String, String>,
+    /// The operator's own devices, and where to write them. `None` for the
+    /// path means in-memory only — tests, and daemons that were never asked
+    /// to enroll anything.
+    roster: Arc<Mutex<LocalRoster>>,
+    roster_dir: Option<PathBuf>,
     /// Who the human last approved something for.
     ///
     /// The continuity check hangs off this: when the requester changes, the
@@ -177,8 +193,31 @@ impl Daemon {
             device,
             packs,
             audit,
+            off_namespaces: Default::default(),
+            roster: Arc::new(Mutex::new(LocalRoster::default())),
+            roster_dir: None,
             last_presented: None,
         }
+    }
+
+    /// Use this roster, saving it to `dir` after every enrollment.
+    pub fn with_roster(mut self, roster: Arc<Mutex<LocalRoster>>, dir: PathBuf) -> Self {
+        self.roster = roster;
+        self.roster_dir = Some(dir);
+        self
+    }
+
+    pub fn roster(&self) -> &Arc<Mutex<LocalRoster>> {
+        &self.roster
+    }
+
+    /// Name the namespaces whose packs are installed but off.
+    pub fn with_off_namespaces(
+        mut self,
+        off: std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        self.off_namespaces = off;
+        self
     }
 
     pub fn config(&self) -> &Config {
@@ -238,7 +277,7 @@ impl Daemon {
         }
 
         // 4. Policy.
-        let decision = policy::evaluate(
+        let mut decision = policy::evaluate(
             &self.config,
             &class,
             &Evaluation {
@@ -249,6 +288,21 @@ impl Daemon {
                 device_attached: true,
             },
         );
+
+        // 4b. A pack that is installed and off owns its namespace and has said
+        // no on the operator's behalf. Overrides even a rule that would have
+        // asked — the rule says what the namespace deserves, the switch says
+        // whether anyone is home to classify it, and nobody is.
+        let namespace = crate::config::namespace_of(&refined_action);
+        if let Some(pack) = self.off_namespaces.get(namespace) {
+            let reason = format!(
+                "{refined_action} belongs to the {namespace} namespace, which pack {pack} \
+                 classifies — and {pack} is installed but switched off. \
+                 `signetd pack enable {pack}` to present it again"
+            );
+            decision.explanation = format!("refused: {reason}");
+            decision.outcome = Outcome::Deny { reason };
+        }
 
         // Build the signable request now: its digest is what the device shows
         // and what a verifier later recomputes.
@@ -295,6 +349,7 @@ impl Daemon {
                         &digest_short,
                     ),
                     request_digest: request_digest.clone(),
+                    request_json: request_json.clone(),
                     digest_short: digest_short.clone(),
                     severity,
                     requester: describe_requester(request, &self.last_presented, origin),
@@ -311,8 +366,9 @@ impl Daemon {
                     claimed_id: request.requester_id.clone(),
                 });
 
-                match self.device.present(&presentation) {
+                match self.device.present(&presentation, &Cancel::none()) {
                     DeviceOutcome::Approved {
+                        device_id,
                         counter,
                         device_unix_ms,
                         signature,
@@ -323,7 +379,7 @@ impl Daemon {
                             decision: Decision::Approved,
                             request_digest: request_digest.clone(),
                             signatures: vec![countersign_verify::DeviceSignature {
-                                device_id: self.device.info().device_id,
+                                device_id,
                                 counter,
                                 device_unix_ms,
                                 signature,
@@ -371,6 +427,142 @@ impl Daemon {
             warnings,
             envelope,
         })
+    }
+
+    /// Enroll the attached device to `subject`: the ceremony in enrollment
+    /// spec §2, run through the ordinary presentation path.
+    ///
+    /// The device renders *Enroll this device as an approver for {subject}* and
+    /// a human holds. What comes back is verified like any other approval, and
+    /// then — because it is a proof of possession by the record's own key — it
+    /// becomes the record's `proof`. One signing construction in the protocol;
+    /// enrollment goes through it (enrollment spec §2).
+    ///
+    /// Which device signed decides the class. A mock or a relay signs with a
+    /// published test key and enrolls as `test`; an attached app enrolls as
+    /// `enclave`. The daemon does not take the class from anything the signer
+    /// said about itself — it takes it from what kind of device it *is*, which
+    /// the daemon built.
+    pub fn enroll(&mut self, subject: &str, display: Option<&str>) -> Result<EnrollmentRecord, DaemonError> {
+        let subject = subject.trim();
+        if subject.is_empty() {
+            return Err(DaemonError::Internal("a subject is required — an email or a stable id".into()));
+        }
+        let statement = enrollment_statement(subject);
+        let wire = Request {
+            v: VERSION,
+            nonce: new_nonce(),
+            requester: Requester {
+                id: "signetd enroll".into(),
+                instance: String::new(),
+                pid: None,
+            },
+            action: ENROLLMENT_ACTION.into(),
+            target: countersign_verify::Target {
+                kind: "enrollment".into(),
+                uri_fingerprint: countersign_verify::encoding::hex_encode(&sha2::Sha256::digest(subject.as_bytes())),
+            },
+            statement: statement.clone(),
+            advisory: None,
+            ttl_ms: 120_000,
+        };
+        let request_json =
+            serde_json::to_string(&wire).map_err(|e| DaemonError::Internal(e.to_string()))?;
+        let request_json = countersign_verify::canonicalize_str(&request_json).map_err(DaemonError::Jcs)?;
+        let request_digest =
+            countersign_verify::digest_of_json(&request_json).map_err(DaemonError::Jcs)?;
+        let digest_short = digest_display(&request_digest);
+
+        // The ceremony is as consequential as anything the device will ever
+        // sign — it decides who may approve from now on — so it gets the
+        // longest arm delay and the longest hold.
+        let presentation = Presentation {
+            render: vec![
+                RenderLine { role: RenderRole::Label, text: "enrollment".into() },
+                RenderLine::primary(statement.clone()),
+                RenderLine::advisory(enrollment_advisory(&self.device.devices())),
+                RenderLine { role: RenderRole::Digest, text: digest_short.clone() },
+            ],
+            request_digest: request_digest.clone(),
+            request_json: request_json.clone(),
+            digest_short,
+            severity: Severity::Critical,
+            requester: "signetd enroll (this machine)".into(),
+            requester_changed: true,
+            ttl_ms: wire.ttl_ms,
+        };
+        // Enrolling is a new requester by definition.
+        self.last_presented = Some(LastPresented {
+            connection: 0,
+            claimed_id: "signetd enroll".into(),
+        });
+
+        let outcome = self.device.present(&presentation, &Cancel::none());
+        let (decision, record) = match outcome {
+            DeviceOutcome::Approved { device_id, counter, device_unix_ms, signature, dwell_ms } => {
+                let signer = self
+                    .device
+                    .devices()
+                    .into_iter()
+                    .find(|d| d.device_id == device_id)
+                    .ok_or_else(|| DaemonError::Internal(format!(
+                        "device {device_id} signed but is not one this daemon knows"
+                    )))?;
+                let public_key = countersign_verify::encoding::hex_decode(&signer.public_key_hex)
+                    .map_err(|_| DaemonError::Internal("device reported no public key".into()))?;
+                let proof = ApprovalEnvelope {
+                    request_json: request_json.clone(),
+                    bundle: Bundle {
+                        v: VERSION,
+                        decision: Decision::Approved,
+                        request_digest: request_digest.clone(),
+                        signatures: vec![countersign_verify::DeviceSignature {
+                            device_id: device_id.clone(),
+                            counter,
+                            device_unix_ms,
+                            signature,
+                            dwell_ms,
+                        }],
+                    },
+                };
+                let mut operator = Operator::new(subject);
+                operator.display = display.map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
+                let mut record = EnrollmentRecord::new(&public_key, operator, now_unix_ms())
+                    .with_class(signer.class);
+                record.proof = Some(proof);
+
+                {
+                    let mut roster = self.roster.lock().expect("roster mutex");
+                    roster.enroll(record.clone()).map_err(|e| DaemonError::Internal(e.to_string()))?;
+                    if let Some(dir) = &self.roster_dir {
+                        roster.save(dir).map_err(|e| DaemonError::Internal(e.to_string()))?;
+                    }
+                }
+                (Decision::Approved, Some(record))
+            }
+            DeviceOutcome::Aborted => (Decision::Aborted, None),
+            DeviceOutcome::Expired => (Decision::Expired, None),
+        };
+
+        // The trail records the ceremony like any other approval, whichever
+        // way it went. "Who enrolled a key last Tuesday" is an audit question.
+        self.audit.append(NewEntry {
+            at_unix_ms: now_unix_ms(),
+            action: ENROLLMENT_ACTION.into(),
+            target_kind: "enrollment".into(),
+            target_fingerprint: wire.target.uri_fingerprint.clone(),
+            environment_label: "enrollment".into(),
+            request_json,
+            decision,
+            severity: Some(Severity::Critical.as_str().to_string()),
+            signatures: record
+                .as_ref()
+                .and_then(|r| r.proof.as_ref())
+                .map(|p| p.bundle.signatures.clone())
+                .unwrap_or_default(),
+        })?;
+
+        record.ok_or(DaemonError::NotApproved(decision))
     }
 
     /// Ask whichever pack claims this namespace.
@@ -498,6 +690,24 @@ fn describe_requester(
 /// Generated here rather than accepted from the requester. The wire format
 /// allows a client-supplied nonce, but a daemon that mints its own cannot be
 /// handed a reused one, and nothing is lost by being stricter.
+/// What class the record will carry — said on the screen before anyone holds.
+///
+/// Several devices may be asked at once and they need not share a class: the
+/// Mac app and a phone are both `enclave`, the browser page is `test`. The
+/// record takes the class of whichever signs, so when they differ the line
+/// says so rather than naming one and being wrong for the other.
+fn enrollment_advisory(devices: &[crate::device::DeviceInfo]) -> String {
+    let classes: std::collections::BTreeSet<_> = devices.iter().map(|d| d.class).collect();
+    match classes.len() {
+        0 => "no device is attached to enroll".to_string(),
+        1 => format!("this key will be enrolled as {}", classes.iter().next().expect("one")),
+        _ => format!(
+            "this key will be enrolled as the class of the device that signs: {}",
+            classes.iter().map(ToString::to_string).collect::<Vec<_>>().join(" or ")
+        ),
+    }
+}
+
 fn new_nonce() -> String {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).expect("the OS must provide randomness");
@@ -508,6 +718,8 @@ fn new_nonce() -> String {
 pub enum DaemonError {
     /// Neither a URI nor a fingerprint was supplied.
     NoTarget,
+    /// The human did not approve — an enrollment that was declined or expired.
+    NotApproved(Decision),
     Store(StoreError),
     Jcs(countersign_verify::JcsError),
     Internal(String),
@@ -519,6 +731,7 @@ impl std::fmt::Display for DaemonError {
             DaemonError::NoTarget => {
                 f.write_str("request supplied neither target_uri nor uri_fingerprint")
             }
+            DaemonError::NotApproved(d) => write!(f, "not approved: {}", d.as_str()),
             DaemonError::Store(e) => write!(f, "{e}"),
             DaemonError::Jcs(e) => write!(f, "{e}"),
             DaemonError::Internal(e) => write!(f, "internal error: {e}"),

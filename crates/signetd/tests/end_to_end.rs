@@ -413,9 +413,9 @@ impl Device for Recording {
     fn info(&self) -> DeviceInfo {
         self.inner.info()
     }
-    fn present(&mut self, presentation: &Presentation) -> DeviceOutcome {
+    fn present(&mut self, presentation: &Presentation, cancel: &signetd::device::Cancel) -> DeviceOutcome {
         self.seen.lock().unwrap().push(presentation.clone());
-        self.inner.present(presentation)
+        self.inner.present(presentation, cancel)
     }
 }
 
@@ -591,4 +591,54 @@ fn a_forwarded_client_is_a_different_requester_from_a_local_one() {
         seen[2].requester_changed,
         "a tunnelled client must announce itself"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Installed-but-off packs — see `signetd::packs`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_namespace_whose_pack_is_switched_off_is_refused_without_asking() {
+    // The config names `sql` in a rule, so ordinarily a statement in it would
+    // reach the device. With the pack that classifies it installed and off,
+    // nobody is home to say what the statement does, and the dial stays dark.
+    let dir = temp_dir("pack-off");
+    let audit = AuditStore::open(&dir.join("audit")).unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let device = Recording {
+        inner: MockDevice::new(MockBehaviour::Auto),
+        seen: Arc::clone(&seen),
+    };
+    let mut off = std::collections::BTreeMap::new();
+    off.insert("sql".to_string(), "countersign-db".to_string());
+    let mut daemon = Daemon::new(config(), Box::new(device), Vec::new(), audit)
+        .with_off_namespaces(off);
+
+    let response = daemon
+        .handle(
+            &ApprovalRequest {
+                action: "sql.execute".into(),
+                target_uri: Some(URI.into()),
+                uri_fingerprint: None,
+                target_kind: "database".into(),
+                statement: "DROP TABLE users;".into(),
+                advisory: None,
+                requester_id: "claude-code".into(),
+                requester_instance: "s1".into(),
+                ttl_ms: None,
+            },
+            ORIGIN,
+        )
+        .unwrap();
+
+    assert_eq!(response.decision, Decision::Refused, "{response:?}");
+    assert!(
+        response.explanation.contains("countersign-db") && response.explanation.contains("pack enable"),
+        "the refusal names the pack and the way back on: {}",
+        response.explanation
+    );
+    assert!(seen.lock().unwrap().is_empty(), "the device was never asked");
+    // Refusals are audited too — "did anything try to drop that table" must
+    // still have an answer.
+    assert_eq!(daemon.audit().len(), 1);
 }

@@ -61,7 +61,7 @@ and the signature verifies **against the record's own public key**.
 
 ```jsonc
 {
-  "device_id": "<lowercase hex SHA-256 of the public key bytes>",
+  "device_id": "<lowercase hex SHA-256 of the SEC1 uncompressed public key>",
   "public_key_hex": "04…",              // SEC1 uncompressed, 65 bytes
   "operator": { "subject": "alice@example.com", "display": "Alice" },
   "enrolled_at_unix_ms": 1755000000000,
@@ -74,6 +74,10 @@ and the signature verifies **against the record's own public key**.
 `device_id` MUST be **derived and re-derived**, never trusted as asserted. A
 roster that listed one key under another device's id would make every lookup
 keyed on that id resolve to the wrong key. Verifiers MUST recompute it.
+
+The derivation is fixed by `countersign-v1.md` §4.2 — SHA-256 over the 65-byte
+SEC1 uncompressed encoding, including the `0x04` prefix that secure elements
+omit from the key material they return.
 
 `operator.subject` SHOULD be a stable identifier — an email, an employee id, an
 OIDC subject — and SHOULD NOT be a display name, which people change.
@@ -237,7 +241,7 @@ Two consequences implementations MUST get right:
 - **An enrollment proof is bound to a key, not to the words.** Both of a
   person's devices sign the identical statement text, so a proof MUST be
   verified against its own record's public key. Otherwise one device's proof
-  would enrol another.
+  would enroll another.
 
 ### 6.4 Offboarding revokes a person, not a device
 
@@ -265,7 +269,7 @@ permissive direction defeats the control.
 
 ## 7. Trust models
 
-**Direct.** One operator, one machine. `countersign enrol` runs the ceremony in
+**Direct.** One operator, one machine. `countersign enroll` runs the ceremony in
 §2 and writes the record locally. The trust root is the local filesystem. Right
 for an individual; no roster needed.
 
@@ -284,8 +288,8 @@ exists.
 - **Self-enrollment without an authority.** In the roster model, a device MUST
   NOT be able to add itself. Proof of possession shows a device holds its key;
   it says nothing about whether that device should be trusted.
-- **Enrollment by an agent.** The human is the point. An agent that could enrol
-  a device could enrol its own.
+- **Enrollment by an agent.** The human is the point. An agent that could enroll
+  a device could enroll its own.
 - **Silent re-enrollment.** Changing the operator on an existing record MUST
   require a fresh proof, because the statement names the subject and the old
   signature covers the old name.

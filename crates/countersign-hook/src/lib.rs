@@ -282,19 +282,31 @@ fn ask(request: ApprovalRequest, config: &Config) -> Result<Verdict, String> {
 }
 
 /// The keys this gate will accept.
+///
+/// Only ever the published test keys, and only when asked. There are two of
+/// them — the one `--device=mock` signs with, and the one a remote approval
+/// signs with — because they are different devices and spec §4.1 keeps a
+/// counter per `device_id`. Both are published, so both are refused by a
+/// default verifier; enrolling them here is what `--accept-test-keys` means.
+///
+/// This is a placeholder for a real roster and NEXT_STEPS §3 says so. A gate
+/// that trusts a key because it is compiled in is not a trust root.
 fn registry(accept_test_keys: bool) -> Registry {
     let mut registry = Registry::new();
     if accept_test_keys {
-        use p256::ecdsa::SigningKey;
-        use sha2::{Digest, Sha256};
-        let key = SigningKey::from_slice(&Sha256::digest(
-            signetd::device::TEST_KEY_DERIVATION.as_bytes(),
-        ))
-        .expect("the derived test scalar is valid");
-        registry.enroll(
-            EnrolledDevice::test_key(key.verifying_key().to_sec1_bytes().to_vec())
-                .with_operator(countersign_verify::Operator::new("mock-device")),
-        );
+        for (derivation, operator) in [
+            (signetd::device::TEST_KEY_DERIVATION, "mock-device"),
+            (signetd::relay::REMOTE_TEST_KEY_DERIVATION, "remote-device"),
+        ] {
+            use p256::ecdsa::SigningKey;
+            use sha2::{Digest, Sha256};
+            let key = SigningKey::from_slice(&Sha256::digest(derivation.as_bytes()))
+                .expect("the derived test scalar is valid");
+            registry.enroll(
+                EnrolledDevice::test_key(key.verifying_key().to_sec1_bytes().to_vec())
+                    .with_operator(countersign_verify::Operator::new(operator)),
+            );
+        }
     }
     registry
 }

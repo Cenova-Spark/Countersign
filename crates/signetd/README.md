@@ -174,9 +174,84 @@ would otherwise be guessing.
 
 | Mode | Behaviour |
 |---|---|
-| `--device=mock` | Prompt on the daemon's terminal. The default. |
+| `--device=mock` | Prompt on the daemon's terminal. The default. Not combinable: it waits on a keyboard, which nothing can withdraw. |
 | `--device=mock:auto` | Approve everything with no human. Smoke tests only — there is no approval step in it. |
 | `--device=mock:script=P` | Consume `["approve","abort","expire"]` from a JSON file, in order, then abort. |
+| `--device=relay` | Ask a paired phone through the relay. `signetd pair` first. A phone approves with its enclave key once enrolled (below); the relay's browser page approves with a published test key. |
+| `--device=app` | The desktop app attaches over the control socket and approves with its enclave key. Produces an approval a default verifier accepts, once the key is enrolled (below). |
+
+Modes combine with commas — `--device=app,relay` asks the app on this machine
+and the phone at once. The first valid signature wins and the rest are
+withdrawn; one request still yields one signature.
+
+The mock, and the relay's browser page, sign with **published test keys**;
+nothing they produce counts. An app or a phone signs with a key the daemon has
+never seen the private half of, enrolled as class `enclave` — see
+[`spec/device-classes-v1.md`](../../spec/device-classes-v1.md). The daemon
+verifies a phone's approval against its own roster, never against the relay's
+word: the relay registers keys, the daemon enrolls them, and only the second one
+makes a signature count (device-class spec §6).
+
+## Enrolling a device
+
+A device may approve only once the daemon knows whose key it is. That is the
+ceremony in [`spec/enrollment-v1.md`](../../spec/enrollment-v1.md) §2, run on
+the device itself:
+
+```bash
+./target/debug/signetd enroll --subject you@example.com --display "Your Name"
+```
+
+The device shows *Enroll this device as an approver for you@example.com*, and
+you hold. The record — class, public key, and the countersigned proof — lands in
+`~/.config/countersign/roster.json`, the operator's own roster (the *direct*
+trust model). An attached app that is not yet enrolled is shown nothing but this
+ceremony; approvals wait until it is.
+
+A phone enrolls the same way, through the relay: register it on the account
+(`web/`, *Phones*), start the daemon with `--device=relay` (or `app,relay`),
+run `signetd enroll`, and hold on the phone. The daemon verifies the ceremony
+against the key the phone shows, looks that key up in what the relay lists to
+write the record, and from then on verifies every approval against the record
+— never against the relay's listing. When several kinds of device could
+answer, the ceremony's screen says the record takes the class of whichever
+signs.
+
+Enrolling the mock works too, and produces a record whose class is `test`. The
+record is real; the key is not.
+
+## Plugins
+
+A pack classifies statements in a namespace — `countersign-db` does SQL. Packs
+install into `~/.config/countersign/packs/`, switched **off**:
+
+```bash
+cargo build -p countersign-db --lib --target wasm32-unknown-unknown --release
+./target/debug/signetd pack install target/wasm32-unknown-unknown/release/countersign_db.wasm
+./target/debug/signetd pack list
+./target/debug/signetd pack enable countersign-db
+```
+
+Two states, and they are the two the spec already has:
+
+- **Installed** means the directory exists. The daemon knows which namespaces
+  the pack claims from its manifest, without running it.
+- **On** means the pack runs and its namespaces are presentable.
+
+The switch is a hard gate. A pack that is installed and off makes its whole
+namespace **refused without asking** — not shown verbatim at the tier floor,
+which is what a namespace nobody claims gets. Nobody is home to classify the
+statement, and an operator who switched a pack off meant for the dial to stay
+dark. The refusal names the pack and the command that turns it back on.
+
+Anything installed from a `.wasm` runs sandboxed: the module imports nothing,
+so it cannot reach a network or a filesystem, and every call is metered. A
+plugin directory holding a `countersign-plugin.json` and a native executable
+installs the same way and runs as a subprocess — fine for your own packs, never
+what a marketplace distributes. The artifact's hash is checked every start.
+
+With nothing installed, the daemon falls back to the `countersign-db` binary
+beside its own, so a fresh checkout still classifies SQL.
 
 ## Environment
 
@@ -184,7 +259,8 @@ would otherwise be guessing.
 |---|---|
 | `COUNTERSIGN_CONFIG` | Config file path. |
 | `COUNTERSIGN_SOCK` | Control socket path. |
-| `COUNTERSIGN_RUNTIME_DIR` | Where the socket and mock counter live. |
+| `COUNTERSIGN_RUNTIME_DIR` | Where the socket, mock counter, and app counters live. |
+| `COUNTERSIGN_PACKS_DIR` | Where plugins install. Defaults to `<config>/packs`. |
 | `XDG_CONFIG_HOME` | Root for config and the audit trail. |
 
 ## What it writes
@@ -192,6 +268,8 @@ would otherwise be guessing.
 ```
 ~/.config/countersign/audit/chain.jsonl      digests, decisions, signatures
 ~/.config/countersign/audit/payloads.jsonl   the statements
+~/.config/countersign/roster.json            your enrolled devices, with proofs
+~/.config/countersign/packs/packs.toml       installed plugins, on or off
 ```
 
 Deleting `payloads.jsonl` is supported: the chain still verifies, every

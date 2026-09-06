@@ -1,8 +1,12 @@
+pub mod app;
 pub mod audit;
 pub mod config;
 pub mod daemon;
 pub mod device;
 pub mod interactive;
 pub mod mcp;
+pub mod packs;
 pub mod policy;
+pub mod relay;
+pub mod roster;
 pub mod service;
