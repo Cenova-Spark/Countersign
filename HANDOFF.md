@@ -14,7 +14,7 @@ rests on. This file is the state, not the plan.
 | M3 `CountersignKit` (Swift) | done | `swift test` in `swift/CountersignKit`; Rust verifies its fixture in `tests/swift_fixture.rs` |
 | M4 the Mac app | done, Touch ID not exercised by a human yet | `swift test` in `swift/Signet`; `swift/Signet/build-app.sh` |
 | **M5 iPhone app + relay** | **in progress — steps 1–2 of 5 done** | `cargo test -p signetd` (`--lib relay`, `--test relay_phone`); `npm test` in `web` (`test/phones.test.js`) |
-| M6 plugins screen, marketplace index, `countersign-tf` | not started | — |
+| M6 plugins screen, marketplace index, `countersign-tf` | **started 2026-09-05:** `signetd pack info`, `signetd pack new`, `templates/pack` | `cargo test -p signetd` (`packs::tests::info_*`, `scaffold`); `cargo test -p countersign-pack-template` |
 | M7 payment, App Store | not started | — |
 
 **Nothing above is committed.** It sits in the working tree alongside Elijah's
@@ -136,6 +136,24 @@ In the order that keeps each step demoable.
    *whether this is M5 or M7* to Elijah; default to M5 unless told otherwise.
 
 Entitlement and Stripe are **M7**, not M5.
+
+## M6 so far
+
+- **`signetd pack info <dir | file.wasm | name>`** — `packs::inspect` returns a
+  `Report`: the manifest, the artifact's hash against the file, a module's
+  imports (`countersign_pack::wasm_host::imports`), what the pack answers to
+  `describe` inside the sandbox, the installed state, and where the manifest
+  and the pack disagree. A native pack is never run by `info`; a swapped
+  artifact is not looked at further. `main.rs` prints it.
+- **`signetd pack new <name> [--namespace NS] [--dir PATH]`** — `scaffold.rs`
+  embeds `templates/pack` (a workspace member, so it compiles and its tests
+  run) and writes it renamed, with the dependency pointed at the repository
+  and a release profile appended. **The git dependency only works once this
+  work is pushed**; the scaffold's README says how to point at a checkout.
+- Not done: the Plugins screen in the app (the bundled `countersign-db` runs
+  without appearing there — `discover_packs` in `main.rs` spawns it beside
+  the binary, outside `packs.toml`), the marketplace index, `countersign-tf`,
+  and "publish a local pack as a PR".
 
 ## Decisions M5 needs from Elijah
 

@@ -62,6 +62,20 @@ impl std::fmt::Debug for WasmPack {
     }
 }
 
+/// The imports a module declares, as `module.name`, without instantiating it.
+///
+/// A pack must have none, and [`WasmPack::instantiate`] refuses the first one
+/// it sees. This is for telling a person *what* a module would reach for,
+/// before they decide anything about it.
+pub fn imports(bytes: &[u8]) -> Result<Vec<String>, PackFailure> {
+    let module = Module::new(&Engine::default(), bytes)
+        .map_err(|e| PackFailure::Spawn(format!("not a valid WebAssembly module: {e}")))?;
+    Ok(module
+        .imports()
+        .map(|import| format!("{}.{}", import.module(), import.name()))
+        .collect())
+}
+
 impl WasmPack {
     /// Validate, instantiate, and bind the exports.
     ///
@@ -169,5 +183,37 @@ impl WasmPack {
             };
         }
         PackFailure::Crashed(format!("module trapped: {error}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The smallest module there is: a header and nothing else.
+    const EMPTY: &[u8] = b"\0asm\x01\0\0\0";
+
+    /// A module whose whole content is one import, `env.f: () -> ()`. Written
+    /// by hand so the test does not depend on a toolchain: the type section
+    /// declares one empty function type, the import section names it.
+    const IMPORTS_ONE: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic, version
+        0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type section: one () -> ()
+        0x02, 0x09, 0x01, 0x03, b'e', b'n', b'v', 0x01, b'f', 0x00, 0x00, // import env.f
+    ];
+
+    #[test]
+    fn imports_are_listed_and_are_what_instantiation_refuses() {
+        assert_eq!(imports(EMPTY).unwrap(), Vec::<String>::new());
+        assert_eq!(imports(IMPORTS_ONE).unwrap(), vec!["env.f".to_string()]);
+        assert!(imports(b"not wasm").is_err());
+
+        // The list is for telling a person; the refusal is the sandbox.
+        let refused = WasmPack::instantiate(IMPORTS_ONE, DEFAULT_FUEL_PER_CALL).err().unwrap();
+        assert!(refused.to_string().contains("imports env.f"), "{refused}");
+        // And a module that imports nothing but exports nothing is refused
+        // for the other reason: it is not a pack.
+        let not_a_pack = WasmPack::instantiate(EMPTY, DEFAULT_FUEL_PER_CALL).err().unwrap();
+        assert!(not_a_pack.to_string().contains("does not export"), "{not_a_pack}");
     }
 }

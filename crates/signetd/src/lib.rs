@@ -9,4 +9,5 @@ pub mod packs;
 pub mod policy;
 pub mod relay;
 pub mod roster;
+pub mod scaffold;
 pub mod service;

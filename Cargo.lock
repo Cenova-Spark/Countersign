@@ -146,6 +146,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "countersign-pack-template"
+version = "0.1.0"
+dependencies = [
+ "countersign-pack",
+]
+
+[[package]]
 name = "countersign-proxy"
 version = "0.1.0"
 dependencies = [

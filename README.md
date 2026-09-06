@@ -285,6 +285,8 @@ executable speaking a two-method JSON-RPC protocol on stdio — see
 [`spec/pack-protocol-v1.md`](spec/pack-protocol-v1.md). Rust authors get a trait
 and a harness from `countersign-pack`; everyone else implements the protocol
 directly, which is deliberately small enough to do in an afternoon.
+`signetd pack new <name>` writes a crate to start from, and
+`signetd pack info` shows what any pack claims before it is installed.
 
 Three rules a host enforces, so that running third-party code in front of an
 approval prompt is acceptable:

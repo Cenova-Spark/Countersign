@@ -8,7 +8,10 @@
 # `signet-firmware` stays out of here regardless — it has its own lifecycle,
 # its own toolchain, and no reason to share a CI run with a Rust workspace.
 [workspace]
-members = ["crates/*"]
+# `templates/pack` is what `signetd pack new` copies. A member so it is
+# compiled and tested with everything else; a scaffold that rots is worse
+# than none.
+members = ["crates/*", "templates/pack"]
 resolver = "2"
 
 [workspace.package]

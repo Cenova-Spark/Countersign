@@ -8,7 +8,7 @@
 //! signetd pair --code <CODE>  bind this daemon to a relay account
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use countersign_pack::{HostConfig, PackHost};
@@ -18,6 +18,7 @@ use signetd::daemon::{runtime_dir, Daemon};
 use signetd::app::{AppDevice, AppDevices};
 use signetd::device::{Device, Devices, MockAction, MockBehaviour, MockDevice};
 use signetd::roster::LocalRoster;
+use signetd::scaffold;
 use std::sync::{Arc, Mutex};
 use signetd::interactive::InteractiveDevice;
 use signetd::mcp;
@@ -66,6 +67,8 @@ fn print_help() {
          \x20 signetd pair --relay URL --code CODE          bind this daemon to a relay account\n\
          \x20 signetd pack list                             installed plugins, and which are on\n\
          \x20 signetd pack install <dir | file.wasm> [--name N]   install a plugin, switched off\n\
+         \x20 signetd pack info <dir | file.wasm | name>     what a plugin claims, before installing it\n\
+         \x20 signetd pack new <name> [--namespace NS]       write a pack crate to start from\n\
          \x20 signetd pack enable|disable <name>            switch a pack's namespaces on or off\n\
          \x20 signetd pack remove <name>                    uninstall\n\
          \x20 signetd enroll --subject you@example.com [--display Name]\n\
@@ -334,6 +337,9 @@ fn pack(args: &[String]) -> Result<(), String> {
                 println!("Install one:");
                 println!("  signetd pack install path/to/plugin-dir      # holds countersign-plugin.json");
                 println!("  signetd pack install path/to/pack.wasm       # a bare module; the manifest is written for you");
+                println!();
+                println!("Look before installing:   signetd pack info <the same>");
+                println!("Write one:                signetd pack new <name>");
                 return Ok(());
             }
             println!("{:<24} {:<8} {:<7} NAMESPACES", "NAME", "VERSION", "STATE");
@@ -396,6 +402,60 @@ fn pack(args: &[String]) -> Result<(), String> {
             Ok(())
         }
 
+        "info" | "show" | "inspect" => {
+            let source = rest
+                .first()
+                .ok_or("usage: signetd pack info <plugin-dir | pack.wasm | installed-name>")?;
+            let report = packs::inspect(Path::new(source), &dir).map_err(|e| e.to_string())?;
+            print_report(&report, source);
+            Ok(())
+        }
+
+        "new" | "init" => {
+            let mut name: Option<String> = None;
+            let mut namespace: Option<String> = None;
+            let mut dest: Option<PathBuf> = None;
+            let mut iter = rest.iter();
+            while let Some(arg) = iter.next() {
+                if let Some(v) = arg.strip_prefix("--namespace=") {
+                    namespace = Some(v.to_string());
+                } else if arg == "--namespace" {
+                    namespace = iter.next().cloned();
+                } else if let Some(v) = arg.strip_prefix("--dir=") {
+                    dest = Some(PathBuf::from(v));
+                } else if arg == "--dir" {
+                    dest = iter.next().map(PathBuf::from);
+                } else if name.is_none() {
+                    name = Some(arg.clone());
+                } else {
+                    return Err(format!("unexpected argument {arg:?}"));
+                }
+            }
+            let name = name.ok_or("usage: signetd pack new <name> [--namespace NS] [--dir PATH]")?;
+            let namespace = namespace.unwrap_or_else(|| scaffold::default_namespace(&name));
+            let dest = match dest {
+                Some(d) => d,
+                None => std::env::current_dir().map_err(|e| e.to_string())?.join(&name),
+            };
+            let written = scaffold::write(&dest, &name, &namespace).map_err(|e| e.to_string())?;
+            println!("wrote {}", dest.display());
+            for file in &written {
+                println!("  {}", file.display());
+            }
+            let module = format!("target/wasm32-unknown-unknown/release/{}.wasm", scaffold::ident(&name));
+            println!();
+            println!("It claims the namespace {namespace:?}: every action under `{namespace}.`. Next:");
+            println!("  cd {}", dest.display());
+            println!("  cargo test                          # the host's rules, as tests");
+            println!("  cargo build --lib --release --target wasm32-unknown-unknown");
+            println!("  signetd pack info {module}");
+            println!("  signetd pack install {module}");
+            println!();
+            println!("The dependency points at the Countersign repository. Working from a checkout?");
+            println!("README.md says how to point it there instead.");
+            Ok(())
+        }
+
         "enable" | "on" | "disable" | "off" => {
             let name = rest.first().ok_or(format!("usage: signetd pack {verb} <name>"))?;
             let on = matches!(verb, "enable" | "on");
@@ -424,6 +484,126 @@ fn pack(args: &[String]) -> Result<(), String> {
         }
 
         other => Err(format!("unknown pack command {other:?}; try `signetd pack list`")),
+    }
+}
+
+/// What `signetd pack info` prints: the report, in the order a person decides
+/// in — what it is, whether the file is what it says, what it would reach for,
+/// what it claims, and what it answered.
+fn print_report(report: &packs::Report, source: &str) {
+    use packs::{Describe, HashCheck, Source};
+
+    let m = &report.manifest;
+    let state = |on: bool| if on { "on" } else { "off" };
+    let namespaces = |actions: &[String]| -> String {
+        let set: std::collections::BTreeSet<&str> =
+            actions.iter().map(|a| config::namespace_of(a)).collect();
+        set.into_iter().collect::<Vec<_>>().join(", ")
+    };
+
+    println!("{} {}", m.name, m.version);
+    let from = match (&report.source, report.installed) {
+        (Source::Installed(p), Some(on)) => format!("installed, {} · {}", state(on), p.display()),
+        (Source::Installed(p), None) => format!("installed · {}", p.display()),
+        (Source::Directory(p), _) => format!("plugin directory {}", p.display()),
+        (Source::Module(p), _) => format!(
+            "module {} — the manifest below is the one `install` would write",
+            p.display()
+        ),
+    };
+    println!("  from         {from}");
+    if let (Source::Directory(_) | Source::Module(_), Some(on)) = (&report.source, report.installed) {
+        println!(
+            "  installed    already, {} — `signetd pack remove {}` before installing this one",
+            state(on),
+            m.name
+        );
+    }
+    if let Some(d) = &m.description {
+        println!("  description  {d}");
+    }
+    if let Some(l) = &m.license {
+        println!("  license      {l}");
+    }
+    if let Some(s) = &m.source {
+        println!("  source       {s}");
+    }
+    if let Some(pack) = &m.pack {
+        println!(
+            "  artifact     {} · {} · {}",
+            pack.artifact,
+            format!("{:?}", pack.kind).to_lowercase(),
+            human_size(report.artifact_len)
+        );
+        match &report.hash {
+            HashCheck::Matches => println!("  sha256       {} · matches the file", pack.sha256),
+            HashCheck::Mismatch { expected, actual } => println!(
+                "  sha256       DOES NOT MATCH — the manifest pins {expected}, the file is {actual}.\n\
+                 \x20              Nothing more was asked of it, and the daemon would refuse to start it"
+            ),
+        }
+        match &report.imports {
+            Some(list) if list.is_empty() => {
+                println!("  imports      none — it cannot reach a network, a filesystem or a clock")
+            }
+            Some(list) => println!(
+                "  imports      {} — a pack must import nothing; the daemon will refuse to start it",
+                list.join(", ")
+            ),
+            None => {}
+        }
+        println!(
+            "  claims       {} · pure: {}    (the manifest)",
+            namespaces(&pack.actions),
+            if pack.pure { "yes" } else { "no" }
+        );
+    }
+    match &report.describe {
+        Describe::Answered(info) => println!(
+            "  answers      {} · pure: {} · protocol {}    (the pack, asked inside the sandbox)",
+            namespaces(&info.actions),
+            if info.pure { "yes" } else { "no" },
+            info.protocol
+        ),
+        Describe::NativeNotRun => println!(
+            "  answers      not asked — `info` does not run a native pack; the sandbox is what\n\
+             \x20              makes asking safe, and a native binary has none"
+        ),
+        Describe::HashMismatch => {}
+        Describe::Failed(why) => println!("  answers      could not be asked: {why}"),
+    }
+    let disagreements = report.disagreements();
+    if !disagreements.is_empty() {
+        println!("  disagrees    the daemon presents what the running pack claims, and no more:");
+        for line in disagreements {
+            println!("               {line}");
+        }
+    }
+    if !m.policy.is_empty() {
+        println!(
+            "  proposes     {} policy rule(s), shown here and applied by nobody:",
+            m.policy.len()
+        );
+        for rule in &m.policy {
+            println!("               {rule}");
+        }
+    }
+    println!();
+    println!("Any pack may raise severity and never lower it. No pack can write the label or the");
+    println!("digest, or make the dial light up by itself.");
+    if report.installed.is_none() && report.hash == HashCheck::Matches {
+        println!();
+        println!("Install it, switched off:   signetd pack install {source}");
+    }
+}
+
+fn human_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{} KB", bytes / 1024)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
 

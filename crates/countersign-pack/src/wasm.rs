@@ -68,7 +68,7 @@ macro_rules! export_pack {
             };
             let line = ::std::string::String::from_utf8_lossy(&request);
             let response = $crate::handle_line(&$pack, &line);
-            let mut out: ::std::vec::Vec<u8> = ::serde_json::to_vec(&response)
+            let mut out: ::std::vec::Vec<u8> = $crate::serde_json::to_vec(&response)
                 .unwrap_or_else(|_| b"{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32603,\"message\":\"could not serialize response\"}}".to_vec());
             out.shrink_to_fit();
             let out_len = out.len() as u32;

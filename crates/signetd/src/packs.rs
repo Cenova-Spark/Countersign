@@ -24,8 +24,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use countersign_pack::{
-    manifest::{check_name, sha256_hex},
-    ArtifactKind, HostConfig, Manifest, ManifestError, PackArtifact, PackHost,
+    manifest::{check_name, sha256_hex, MANIFEST_VERSION},
+    ArtifactKind, HostConfig, Manifest, ManifestError, PackArtifact, PackHost, PackInfo,
 };
 use serde::{Deserialize, Serialize};
 
@@ -146,11 +146,26 @@ pub fn install_dir(src: &Path, dir: &Path) -> Result<Installed, PacksError> {
 /// with the pack about what it handles.
 pub fn install_wasm(file: &Path, dir: &Path, name: Option<&str>) -> Result<Installed, PacksError> {
     let bytes = std::fs::read(file).map_err(|e| PacksError::Io(file.to_path_buf(), e.to_string()))?;
-    let host = PackHost::spawn_wasm(&bytes, HostConfig::default())
-        .map_err(|e| PacksError::Pack(file.to_path_buf(), e.to_string()))?;
-    let info = host.info().clone();
-    drop(host);
+    let info = describe_module(file, &bytes)?;
+    let manifest = manifest_for_module(file, &bytes, &info, name)?;
+    place(dir, &manifest, &bytes)
+}
 
+/// Instantiate a module in the sandbox and ask it `describe`.
+fn describe_module(file: &Path, bytes: &[u8]) -> Result<PackInfo, PacksError> {
+    let host = PackHost::spawn_wasm(bytes, HostConfig::default())
+        .map_err(|e| PacksError::Pack(file.to_path_buf(), e.to_string()))?;
+    Ok(host.info().clone())
+}
+
+/// The manifest `install` writes for a bare module: what the module said
+/// about itself, pinned to its bytes.
+fn manifest_for_module(
+    file: &Path,
+    bytes: &[u8],
+    info: &PackInfo,
+    name: Option<&str>,
+) -> Result<Manifest, PacksError> {
     let name = name.unwrap_or(&info.name).to_string();
     check_name(&name).map_err(PacksError::Manifest)?;
     let artifact_name = file
@@ -160,8 +175,8 @@ pub fn install_wasm(file: &Path, dir: &Path, name: Option<&str>) -> Result<Insta
         .unwrap_or("pack.wasm")
         .to_string();
 
-    let manifest = Manifest {
-        v: countersign_pack::manifest::MANIFEST_VERSION,
+    Ok(Manifest {
+        v: MANIFEST_VERSION,
         name,
         version: info.version.clone(),
         description: None,
@@ -170,13 +185,212 @@ pub fn install_wasm(file: &Path, dir: &Path, name: Option<&str>) -> Result<Insta
         pack: Some(PackArtifact {
             kind: ArtifactKind::Wasm,
             artifact: artifact_name,
-            sha256: sha256_hex(&bytes),
+            sha256: sha256_hex(bytes),
             actions: info.actions.clone(),
             pure: info.pure,
         }),
         policy: Vec::new(),
+    })
+}
+
+/// What `signetd pack info` shows: everything about a plugin that can be
+/// known before it is installed, and — for a module — what the pack says
+/// about itself when asked inside the sandbox.
+///
+/// Nothing here installs anything, switches anything, or runs a native
+/// binary. The sandbox is what makes asking a module safe, and a native pack
+/// has none; what a native pack does is what its manifest says, and the
+/// operator who installs it is trusting the person who built it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Report {
+    pub source: Source,
+    pub manifest: Manifest,
+    /// The artifact's size on disk.
+    pub artifact_len: u64,
+    pub hash: HashCheck,
+    /// A module's imports, `module.name` each. Empty is the sandbox; anything
+    /// else and the daemon will refuse to start it. `None` when the artifact
+    /// is native, or was not looked at because its hash is wrong.
+    pub imports: Option<Vec<String>>,
+    /// What the pack answered to `describe`, or why it was not asked.
+    pub describe: Describe,
+    /// `Some(on)` when a plugin of this name is installed.
+    pub installed: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    /// A plugin directory holding a manifest.
+    Directory(PathBuf),
+    /// A bare module. The manifest shown is the one `install` would write.
+    Module(PathBuf),
+    /// An installed plugin, named.
+    Installed(PathBuf),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HashCheck {
+    Matches,
+    Mismatch { expected: String, actual: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Describe {
+    Answered(PackInfo),
+    /// Not asked: a native pack is not run by `info`.
+    NativeNotRun,
+    /// Not asked: the artifact is not what the manifest pins.
+    HashMismatch,
+    /// Asked, and it could not be started or did not answer.
+    Failed(String),
+}
+
+impl Report {
+    /// Where the manifest and the pack disagree about what the pack is.
+    ///
+    /// The daemon presents what a running pack claims and no more, so a
+    /// manifest that promises `sql` for a pack that answers `terraform` gets
+    /// nothing presentable — which is worth knowing before the switch is
+    /// flipped, not after. The plugin name is not compared: `install --name`
+    /// lets it differ from the pack's own on purpose.
+    pub fn disagreements(&self) -> Vec<String> {
+        let (Describe::Answered(info), Some(pack)) = (&self.describe, self.manifest.pack.as_ref())
+        else {
+            return Vec::new();
+        };
+        let namespaces = |actions: &[String]| -> BTreeSet<String> {
+            actions.iter().map(|a| namespace_of(a).to_string()).collect()
+        };
+        let join = |set: BTreeSet<String>| set.into_iter().collect::<Vec<_>>().join(", ");
+
+        let mut out = Vec::new();
+        if info.version != self.manifest.version {
+            out.push(format!(
+                "version: the manifest says {}, the pack says {}",
+                self.manifest.version, info.version
+            ));
+        }
+        let (claimed, answered) = (namespaces(&pack.actions), namespaces(&info.actions));
+        if claimed != answered {
+            out.push(format!(
+                "namespaces: the manifest says {}, the pack says {}",
+                join(claimed),
+                join(answered)
+            ));
+        }
+        if info.pure != pack.pure {
+            out.push(format!(
+                "pure: the manifest says {}, the pack says {}",
+                pack.pure, info.pure
+            ));
+        }
+        out
+    }
+}
+
+/// Look at a plugin without installing it.
+///
+/// `source` is a plugin directory, a bare `.wasm` module, or the name of a
+/// plugin already installed under `dir`.
+pub fn inspect(source: &Path, dir: &Path) -> Result<Report, PacksError> {
+    let (origin, plugin_dir) = if source.is_dir() {
+        (Source::Directory(source.to_path_buf()), source.to_path_buf())
+    } else if source.is_file() {
+        return inspect_module(source, dir);
+    } else {
+        let name = source.to_str().unwrap_or_default();
+        let candidate = dir.join(name);
+        if check_name(name).is_ok() && candidate.is_dir() {
+            (Source::Installed(candidate.clone()), candidate)
+        } else {
+            return Err(PacksError::Io(
+                source.to_path_buf(),
+                "not a plugin directory, a .wasm module, or the name of an installed plugin".into(),
+            ));
+        }
     };
-    place(dir, &manifest, &bytes)
+
+    let manifest = Manifest::load(&plugin_dir).map_err(PacksError::Manifest)?;
+    let pack = manifest
+        .pack
+        .as_ref()
+        .ok_or(PacksError::Manifest(ManifestError::NoPack))?;
+    let artifact = plugin_dir.join(&pack.artifact);
+    let bytes = std::fs::read(&artifact)
+        .map_err(|e| PacksError::Io(artifact.clone(), e.to_string()))?;
+    let actual = sha256_hex(&bytes);
+    let hash = if actual == pack.sha256.to_ascii_lowercase() {
+        HashCheck::Matches
+    } else {
+        HashCheck::Mismatch {
+            expected: pack.sha256.clone(),
+            actual,
+        }
+    };
+
+    // A swapped artifact is not looked at further, whatever it is. A native
+    // one is not run. A module is asked, inside the sandbox.
+    let (imports, describe) = match (&hash, pack.kind) {
+        (HashCheck::Mismatch { .. }, _) => (None, Describe::HashMismatch),
+        (HashCheck::Matches, ArtifactKind::Native) => (None, Describe::NativeNotRun),
+        (HashCheck::Matches, ArtifactKind::Wasm) => ask_module(&artifact, &bytes),
+    };
+    let installed = installed_state(dir, &manifest.name)?;
+
+    Ok(Report {
+        source: origin,
+        manifest,
+        artifact_len: bytes.len() as u64,
+        hash,
+        imports,
+        describe,
+        installed,
+    })
+}
+
+fn inspect_module(file: &Path, dir: &Path) -> Result<Report, PacksError> {
+    let bytes = std::fs::read(file).map_err(|e| PacksError::Io(file.to_path_buf(), e.to_string()))?;
+    let (imports, describe) = ask_module(file, &bytes);
+    let info = match &describe {
+        Describe::Answered(info) => info,
+        // Without an answer there is no manifest to show. The reason names
+        // the first import, when that is what stopped it.
+        Describe::Failed(why) => return Err(PacksError::Pack(file.to_path_buf(), why.clone())),
+        Describe::NativeNotRun | Describe::HashMismatch => unreachable!("a module is always asked"),
+    };
+    let manifest = manifest_for_module(file, &bytes, info, None)?;
+    let installed = installed_state(dir, &manifest.name)?;
+    Ok(Report {
+        source: Source::Module(file.to_path_buf()),
+        manifest,
+        artifact_len: bytes.len() as u64,
+        hash: HashCheck::Matches,
+        imports,
+        describe,
+        installed,
+    })
+}
+
+/// A module's imports, then its `describe` — the second only if the first
+/// list is empty, because that is the order the daemon checks in.
+fn ask_module(file: &Path, bytes: &[u8]) -> (Option<Vec<String>>, Describe) {
+    let imports = match countersign_pack::wasm_host::imports(bytes) {
+        Ok(list) => list,
+        Err(e) => return (None, Describe::Failed(e.to_string())),
+    };
+    let describe = match describe_module(file, bytes) {
+        Ok(info) => Describe::Answered(info),
+        Err(e) => Describe::Failed(e.to_string()),
+    };
+    (Some(imports), describe)
+}
+
+fn installed_state(dir: &Path, name: &str) -> Result<Option<bool>, PacksError> {
+    Ok(StateFile::load(dir)?
+        .packs
+        .iter()
+        .find(|p| p.name == name)
+        .map(|p| p.enabled))
 }
 
 fn place(dir: &Path, manifest: &Manifest, artifact_bytes: &[u8]) -> Result<Installed, PacksError> {
@@ -474,6 +688,122 @@ mod tests {
         let loaded = load(&dir, HostConfig::default()).unwrap();
         assert!(loaded.hosts.is_empty());
         assert!(loaded.failed[0].1.contains("does not match its manifest"), "{:?}", loaded.failed);
+    }
+
+    /// The db pack's module, if it has been built. Same skip rule as
+    /// `countersign-pack/tests/wasm_pack.rs`: a fresh checkout stays green.
+    fn db_module() -> Option<Vec<u8>> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/wasm32-unknown-unknown/release/countersign_db.wasm");
+        match std::fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(_) => {
+                eprintln!("skipping: {} not built", path.display());
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn info_reads_a_native_plugin_and_runs_nothing() {
+        let root = temp("info-native");
+        let src = root.join("src");
+        let dir = root.join("packs");
+        // The fake pack exits 1 the moment it is run; a report that ran it
+        // would say so.
+        fake_plugin(&src, "countersign-tf", &["terraform.apply"]);
+
+        let report = inspect(&src, &dir).unwrap();
+        assert_eq!(report.source, Source::Directory(src.clone()));
+        assert_eq!(report.hash, HashCheck::Matches);
+        assert_eq!(report.describe, Describe::NativeNotRun);
+        assert_eq!(report.imports, None);
+        assert_eq!(report.installed, None);
+        assert!(report.disagreements().is_empty());
+        assert!(!dir.exists(), "info must not install anything");
+
+        install_dir(&src, &dir).unwrap();
+        let report = inspect(Path::new("countersign-tf"), &dir).unwrap();
+        assert!(matches!(report.source, Source::Installed(_)));
+        assert_eq!(report.installed, Some(false));
+        set_enabled(&dir, "countersign-tf", true).unwrap();
+        assert_eq!(inspect(Path::new("countersign-tf"), &dir).unwrap().installed, Some(true));
+
+        assert!(inspect(Path::new("not-installed"), &dir).is_err());
+    }
+
+    #[test]
+    fn info_notices_a_swapped_artifact_and_asks_it_nothing() {
+        let root = temp("info-swap");
+        let src = root.join("src");
+        let dir = root.join("packs");
+        fake_plugin(&src, "countersign-tf", &["terraform"]);
+        std::fs::write(src.join("pack.sh"), b"#!/bin/sh\ncurl evil\n").unwrap();
+
+        let report = inspect(&src, &dir).unwrap();
+        assert!(matches!(report.hash, HashCheck::Mismatch { .. }));
+        assert_eq!(report.describe, Describe::HashMismatch);
+        assert_eq!(report.imports, None);
+    }
+
+    #[test]
+    fn info_on_a_module_shows_the_manifest_install_would_write() {
+        let Some(bytes) = db_module() else { return };
+        let root = temp("info-wasm");
+        let dir = root.join("packs");
+        let file = root.join("countersign_db.wasm");
+        std::fs::write(&file, &bytes).unwrap();
+
+        let report = inspect(&file, &dir).unwrap();
+        assert_eq!(report.source, Source::Module(file.clone()));
+        assert_eq!(report.manifest.name, "countersign-db");
+        assert_eq!(report.imports.as_deref(), Some(&[][..]), "the sandbox: nothing imported");
+        let Describe::Answered(info) = &report.describe else {
+            panic!("the module should answer: {:?}", report.describe)
+        };
+        assert_eq!(info.actions, vec!["sql".to_string()]);
+        assert!(report.disagreements().is_empty());
+        assert_eq!(report.installed, None);
+
+        let installed = install_wasm(&file, &dir, None).unwrap();
+        assert_eq!(installed.manifest, report.manifest, "what info showed is what install wrote");
+        assert_eq!(inspect(&file, &dir).unwrap().installed, Some(false));
+    }
+
+    #[test]
+    fn info_says_where_a_manifest_and_its_pack_disagree() {
+        let Some(bytes) = db_module() else { return };
+        let root = temp("info-disagree");
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("pack.wasm"), &bytes).unwrap();
+        // A manifest that promises Terraform, a different version, and impurity,
+        // wrapped around the SQL pack.
+        Manifest {
+            v: 1,
+            name: "countersign-tf".into(),
+            version: "9.9.9".into(),
+            description: None,
+            license: None,
+            source: None,
+            pack: Some(PackArtifact {
+                kind: ArtifactKind::Wasm,
+                artifact: "pack.wasm".into(),
+                sha256: sha256_hex(&bytes),
+                actions: vec!["terraform".into()],
+                pure: false,
+            }),
+            policy: vec![],
+        }
+        .save(&src)
+        .unwrap();
+
+        let report = inspect(&src, &root.join("packs")).unwrap();
+        let disagreements = report.disagreements();
+        assert_eq!(disagreements.len(), 3, "{disagreements:?}");
+        assert!(disagreements[0].starts_with("version:"));
+        assert!(disagreements[1].contains("the manifest says terraform, the pack says sql"));
+        assert!(disagreements[2].starts_with("pure:"));
     }
 
     #[test]

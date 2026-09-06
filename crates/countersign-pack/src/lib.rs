@@ -57,6 +57,10 @@
 
 pub mod host;
 pub mod rpc;
+/// For [`export_pack!`], which expands in the pack's own crate and must name
+/// `serde_json` through this one rather than expect the pack to depend on it.
+#[doc(hidden)]
+pub use serde_json;
 pub mod serve;
 pub mod types;
 pub mod wasm;

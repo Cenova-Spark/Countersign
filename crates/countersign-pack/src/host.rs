@@ -388,7 +388,11 @@ impl Drop for PackHost {
     fn drop(&mut self) {
         // Closing stdin ends `run_stdio`'s loop; kill covers a pack that ignores
         // EOF. Neither is allowed to fail loudly in a destructor. A wasm module
-        // has no process to end; dropping the store is enough.
+        // has no process to end; dropping the store is enough. Without the
+        // `wasm-host` feature this is the only variant, and the `if let` is
+        // irrefutable; a pack crate building its own module would be warned
+        // about it on every build otherwise.
+        #[allow(irrefutable_let_patterns)]
         if let Transport::Process { child, .. } = &mut self.transport {
             let _ = child.kill();
             let _ = child.wait();

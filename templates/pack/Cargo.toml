@@ -1,0 +1,18 @@
+[package]
+name = "countersign-pack-template"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "A Countersign domain pack. Rename it, then teach `classify` your domain."
+
+# `rlib` is what the tests and the binary link; `cdylib` is the WebAssembly
+# build, the form a marketplace lists.
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "countersign-pack-template"
+path = "src/main.rs"
+
+[dependencies]
+countersign-pack = { path = "../../crates/countersign-pack" }

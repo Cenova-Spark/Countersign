@@ -227,10 +227,22 @@ install into `~/.config/countersign/packs/`, switched **off**:
 
 ```bash
 cargo build -p countersign-db --lib --target wasm32-unknown-unknown --release
+./target/debug/signetd pack info    target/wasm32-unknown-unknown/release/countersign_db.wasm
 ./target/debug/signetd pack install target/wasm32-unknown-unknown/release/countersign_db.wasm
 ./target/debug/signetd pack list
 ./target/debug/signetd pack enable countersign-db
 ```
+
+`pack info` is the look before the install. It shows the manifest, whether
+the artifact is the one the manifest pins, a module's imports — none is the
+sandbox — and, for a module, what the pack answers to `describe` when asked
+inside that sandbox, next to what the manifest claims. Where the two
+disagree, it says so: the daemon presents what a running pack claims and no
+more. A native pack is not run by `info`. Nothing is installed or switched.
+
+`pack new <name> [--namespace NS]` writes a pack crate to start from — the
+one in `templates/pack`, renamed. It compiles, its tests are the host's rules,
+and its README walks from `cargo test` to `pack install`.
 
 Two states, and they are the two the spec already has:
 
