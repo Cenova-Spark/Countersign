@@ -126,20 +126,32 @@ indirect enum AnyJSON: Decodable {
 }
 
 /// The write path for plugins: the CLI, run as a subprocess.
-public enum PackCLI {
-    public static func setEnabled(_ name: String, _ on: Bool, signetd: URL) throws {
+/// Run a `signetd` subcommand and wait for it. What the daemon's own tools
+/// know how to do, the app asks them to do, rather than keeping a second
+/// copy of the rules.
+public enum DaemonCLI {
+    /// Returns what the command printed. Throws with the same text when it
+    /// exits non-zero, so the menu can show the daemon's own explanation.
+    @discardableResult
+    public static func run(_ signetd: URL, _ arguments: [String]) throws -> String {
         let process = Process()
         process.executableURL = signetd
-        process.arguments = ["pack", on ? "enable" : "disable", name]
+        process.arguments = arguments
         let pipe = Pipe()
         process.standardError = pipe
         process.standardOutput = pipe
         try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        if process.terminationStatus != 0 {
-            let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            throw PackCLIError.failed(text.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
+        let text = (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if process.terminationStatus != 0 { throw PackCLIError.failed(text) }
+        return text
+    }
+}
+
+public enum PackCLI {
+    public static func setEnabled(_ name: String, _ on: Bool, signetd: URL) throws {
+        try DaemonCLI.run(signetd, ["pack", on ? "enable" : "disable", name])
     }
 }
 

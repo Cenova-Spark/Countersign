@@ -180,6 +180,12 @@ cargo test --workspace && cargo clippy --workspace --all-targets   # Rust
 cargo build -p countersign-db --lib --target wasm32-unknown-unknown --release   # the wasm pack
 ```
 
+**A fresh start, for demos:** `signetd wipe --yes` removes everything the
+daemon wrote (`crates/signetd/src/wipe.rs` is the list) and refuses while a
+daemon listens; **Devices → Start over** in the Mac app stops its daemon, runs
+that, forgets the enclave key (`EnclaveDevice.reset`) and comes back with a
+new one. The relay's copy of a registered phone is not touched by either.
+
 All four suites were green at handoff: 396 Rust tests, 32 TypeScript, 31 kit,
 8 app. Clippy clean. After M5 steps 1–2 (2026-09-05): Rust and clippy still
 green with `crates/signetd/tests/relay_phone.rs` added (3 tests), `web` at 22

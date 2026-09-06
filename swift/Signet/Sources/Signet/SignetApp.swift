@@ -41,6 +41,7 @@ struct MenuBarLabel: View {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let session: AppSession
     private var approvalWindow: ApprovalWindowController?
+    private var enclave: EnclaveDevice?
 
     override init() {
         // The enclave key, or a clear reason there is none. An app without a
@@ -49,8 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let signer: Signer
         let counters: CounterStore
         var startupProblem: String?
+        var enclave: EnclaveDevice?
         do {
             let device = try EnclaveDevice()
+            enclave = device
             signer = device
             counters = device.countersigner.counters
         } catch {
@@ -62,9 +65,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let controller = DaemonController()
         session = AppSession(signer: signer, counters: counters, deviceName: Host.current().localizedName ?? "Mac", controller: controller)
+        self.enclave = enclave
         super.init()
         if let startupProblem {
             Task { @MainActor in self.session.noteStartupProblem(startupProblem) }
+        }
+        if enclave != nil {
+            // Only the app can forget its key: the item is in the keychain
+            // under the app's identity. A fresh device follows at once, so the
+            // session never holds a signer that cannot sign.
+            session.forgetKey = { [unowned self] in
+                try self.enclave?.reset()
+                let fresh = try EnclaveDevice()
+                self.enclave = fresh
+                return (fresh, fresh.countersigner.counters)
+            }
         }
     }
 

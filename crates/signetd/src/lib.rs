@@ -11,3 +11,4 @@ pub mod relay;
 pub mod roster;
 pub mod scaffold;
 pub mod service;
+pub mod wipe;

@@ -25,6 +25,7 @@ use signetd::mcp;
 use signetd::packs;
 use signetd::relay::{RelayConfig, RelayDevice};
 use signetd::service::{self, forward_socket_path, socket_path};
+use signetd::wipe;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -38,6 +39,7 @@ fn main() -> ExitCode {
         "pair" => pair(&args[1..]),
         "pack" => pack(&args[1..]),
         "enroll" => enroll(&args[1..]),
+        "wipe" => wipe_command(&args[1..]),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -73,6 +75,7 @@ fn print_help() {
          \x20 signetd pack remove <name>                    uninstall\n\
          \x20 signetd enroll --subject you@example.com [--display Name]\n\
          \x20                                               enroll the attached device to a person\n\
+         \x20 signetd wipe [--yes]                          forget everything the daemon wrote — demos and development\n\
          \n\
          DEVICE MODES  (combine with commas: --device=app,relay)\n\
          \x20 mock            prompt on this terminal (default; not combinable)\n\
@@ -485,6 +488,55 @@ fn pack(args: &[String]) -> Result<(), String> {
 
         other => Err(format!("unknown pack command {other:?}; try `signetd pack list`")),
     }
+}
+
+/// `signetd wipe [--yes]` — the daemon's state, gone. For demos and development.
+///
+/// Without `--yes` it only says what would go. With it, it refuses while a
+/// daemon is listening, then removes the lot and says what stayed.
+fn wipe_command(args: &[String]) -> Result<(), String> {
+    let yes = args.iter().any(|a| a == "--yes" || a == "-y");
+    if let Some(other) = args.iter().find(|a| *a != "--yes" && *a != "-y") {
+        return Err(format!("unexpected argument {other:?}; usage: signetd wipe [--yes]"));
+    }
+    let targets = wipe::targets(&config::config_dir(), &runtime_dir(), &packs::packs_dir());
+
+    if !yes {
+        println!("A wipe removes, for a fresh start:");
+        for t in &targets {
+            println!(
+                "  {:<40} {}{}",
+                t.what,
+                t.path.display(),
+                if t.exists() { "" } else { "   (not there)" }
+            );
+        }
+        println!();
+        println!("Kept: config.toml, which is configuration, and the Mac app's enclave key, which only");
+        println!("the app can forget (Devices → Start over does both). For demos and development;");
+        println!("nothing here can be undone.");
+        println!();
+        println!("  signetd wipe --yes");
+        return Ok(());
+    }
+
+    let sock = socket_path();
+    if service::Client::connect(&sock).is_ok() {
+        return Err(format!(
+            "a daemon is listening at {} and would write the roster and the chain straight back. \
+             Stop it first — Quit in Signet, or end `signetd run` — then wipe",
+            sock.display()
+        ));
+    }
+    let removed = wipe::wipe(&targets).map_err(|e| e.to_string())?;
+    if removed.is_empty() {
+        println!("nothing to remove; this is already a fresh start");
+    }
+    for t in removed {
+        println!("removed  {:<40} {}", t.what, t.path.display());
+    }
+    println!("kept     config.toml; this Mac's enclave key is the app's to forget");
+    Ok(())
 }
 
 /// What `signetd pack info` prints: the report, in the order a person decides

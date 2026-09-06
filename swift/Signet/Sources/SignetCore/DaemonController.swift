@@ -122,9 +122,9 @@ public final class DaemonController {
         process.terminate()
     }
 
-    /// Kill our daemon and start a fresh one — after `signetd pack …`, which
-    /// the daemon reads at startup.
-    public func restart() throws {
+    /// Stop our daemon and wait until nothing answers on the socket. A daemon
+    /// we joined is not ours to stop; this returns at once for it.
+    public func stopAndWait() {
         if let process, process.isRunning {
             process.terminate()
             process.waitUntilExit()
@@ -133,6 +133,12 @@ public final class DaemonController {
         for _ in 0..<50 where UnixSocket.canConnect(path: socketPath) {
             Thread.sleep(forTimeInterval: 0.02)
         }
+    }
+
+    /// Kill our daemon and start a fresh one — after `signetd pack …`, which
+    /// the daemon reads at startup.
+    public func restart() throws {
+        stopAndWait()
         try ensureRunning()
     }
 

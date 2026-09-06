@@ -139,6 +139,9 @@ struct DevicesView: View {
                 }
                 if let error { Text(error).font(.system(size: 11)).foregroundColor(Theme.refuse) }
             }
+
+            Divider().padding(.top, 4)
+            StartOver()
         }
         .padding(.horizontal, 14)
         .onAppear {
@@ -173,6 +176,51 @@ struct DevicesView: View {
         guard parts.count == 2, !parts[0].isEmpty else { return false }
         let domain = parts[1]
         return domain.contains(".") && !domain.hasPrefix(".") && !domain.hasSuffix(".") && !text.contains(" ")
+    }
+}
+
+/// A fresh start, for demos and development. Two presses, with what it will
+/// do said in between, because nothing here can be undone.
+struct StartOver: View {
+    @EnvironmentObject var session: AppSession
+    @State private var confirming = false
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if busy {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Starting over…").font(.system(size: 11)).foregroundColor(Theme.amber)
+                }
+            } else if confirming {
+                Text("Forgets this Mac's key, the roster, the audit trail, installed plugins and the relay pairing. For demos and development. It cannot be undone.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 12) {
+                    Button("Wipe everything", action: run)
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.refuse)
+                    Button("Keep") { confirming = false }
+                        .buttonStyle(.plain).foregroundColor(.secondary)
+                }
+            } else {
+                Button("Start over…") { confirming = true }
+                    .buttonStyle(.plain).foregroundColor(.secondary).font(.system(size: 11))
+            }
+            if let error { Text(error).font(.system(size: 11)).foregroundColor(Theme.refuse) }
+        }
+    }
+
+    private func run() {
+        confirming = false
+        busy = true
+        error = nil
+        Task {
+            do { try await session.startOver() } catch { self.error = String(describing: error) }
+            busy = false
+        }
     }
 }
 

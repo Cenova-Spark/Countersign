@@ -87,8 +87,8 @@ public final class AppSession: ObservableObject {
     @Published public private(set) var plugins: [InstalledPlugin] = []
     @Published public private(set) var log: [String] = []
 
-    public let signer: Signer
-    public let countersigner: Countersigner
+    public private(set) var signer: Signer
+    public private(set) var countersigner: Countersigner
     public let deviceName: String
     public let controller: DaemonController
     public let socketPath: String
@@ -97,9 +97,18 @@ public final class AppSession: ObservableObject {
     /// The approval window is opened and closed from here.
     public var onPendingChange: ((PendingApproval?) -> Void)?
 
+    /// Forget this Mac's key and make a new one. Set by whoever holds the
+    /// enclave device: the keychain item is under the app's identity, and
+    /// the session cannot reach it.
+    public var forgetKey: (() throws -> (Signer, CounterStore))?
+    /// Remove what the daemon wrote. `signetd wipe --yes` unless something
+    /// else is set — the tests set something that needs no binary.
+    public var wipeDaemonState: (() throws -> Void)?
+
     private var device: DaemonConnection?
     private var control: DaemonConnection?
     private var reconnectScheduled = false
+    private var startingOver = false
 
     public init(signer: Signer, counters: CounterStore, deviceName: String, controller: DaemonController) {
         self.signer = signer
@@ -112,8 +121,9 @@ public final class AppSession: ObservableObject {
         }
         controller.onExit = { [weak self] _ in
             Task { @MainActor in
-                self?.daemonState = .stopped
-                self?.scheduleReconnect()
+                guard let self else { return }
+                self.daemonState = self.controller.state
+                self.scheduleReconnect()
             }
         }
     }
@@ -168,8 +178,21 @@ public final class AppSession: ObservableObject {
         }
     }
 
+    /// Drop both connections without letting their close handlers run: the
+    /// handlers exist for a daemon that went away, not for one we are about
+    /// to replace on purpose.
+    private func disconnect() {
+        device?.onClose = nil
+        device?.onPush = nil
+        device?.close()
+        control?.close()
+        device = nil
+        control = nil
+        attachment = nil
+    }
+
     private func scheduleReconnect() {
-        guard !reconnectScheduled else { return }
+        guard !reconnectScheduled, !startingOver else { return }
         reconnectScheduled = true
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -212,13 +235,54 @@ public final class AppSession: ObservableObject {
         try PackCLI.setEnabled(name, enabled, signetd: binary)
         plugins = InstalledPlugin.loadAll()
         if case .running = controller.state {
-            device?.close()
-            control?.close()
+            disconnect()
             try controller.restart()
             await connect()
         } else {
             lastMessage = "Restart signetd for this to take effect"
         }
+    }
+
+    /// A fresh start, for demos and development: this Mac's key, the roster,
+    /// the audit trail, the plugins and the relay pairing, all gone.
+    ///
+    /// Our daemon is stopped first, because a running one holds the roster
+    /// and the chain and would write them straight back — `signetd wipe`
+    /// refuses while anything is listening, so a daemon we only joined makes
+    /// this fail with that reason. Then the key, which only the app can
+    /// forget; then a new key, a new daemon, and an attach that will say
+    /// "not enrolled".
+    public func startOver() async throws {
+        startingOver = true
+        defer { startingOver = false }
+        pending = nil
+        disconnect()
+        controller.stopAndWait()
+        daemonState = controller.state
+        do {
+            if let wipeDaemonState {
+                try wipeDaemonState()
+            } else {
+                guard let binary = controller.binary else { throw DaemonError.notFound }
+                try DaemonCLI.run(binary, ["wipe", "--yes"])
+            }
+            if let forgetKey {
+                let (fresh, counters) = try forgetKey()
+                signer = fresh
+                countersigner = Countersigner(signer: fresh, counters: counters)
+            }
+        } catch {
+            append(log: "start over failed: \(error)")
+            // Whatever state that left, get a daemon back before reporting it.
+            await start()
+            throw error
+        }
+        roster = LocalRoster(v: 1, records: [])
+        plugins = []
+        audit = nil
+        status = nil
+        await start()
+        lastMessage = "Fresh start. Enroll this Mac to approve again."
     }
 
     // MARK: Presentations

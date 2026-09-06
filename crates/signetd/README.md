@@ -265,6 +265,23 @@ what a marketplace distributes. The artifact's hash is checked every start.
 With nothing installed, the daemon falls back to the `countersign-db` binary
 beside its own, so a fresh checkout still classifies SQL.
 
+## Starting over
+
+For demos and development, a fresh start:
+
+```bash
+./target/debug/signetd wipe          # says what would go
+./target/debug/signetd wipe --yes    # goes
+```
+
+It removes the roster, the audit trail, installed plugins and their switches,
+the hook's replay state, the device counters and the relay pairing, and it
+refuses while a daemon is listening, because a running daemon would write the
+roster and the chain straight back. `config.toml` stays: that is
+configuration, not data. The Mac app's enclave key is in the keychain under
+the app's identity, so only the app can forget it — **Devices → Start over**
+in the menu does both, and comes back with a new key and an empty roster.
+
 ## Environment
 
 | Variable | Meaning |

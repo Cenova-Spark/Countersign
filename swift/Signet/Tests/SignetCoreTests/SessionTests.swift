@@ -200,6 +200,30 @@ struct SessionTests {
         #expect(seen == [true, true], "and the window is told when there is nothing to show")
     }
 
+    @Test @MainActor func startingOverForgetsTheKeyAndAttachesAgainWithANewOne() async throws {
+        let daemon = try FakeDaemon()
+        defer { daemon.close() }
+        let old = SoftwareSigner()
+        let s = await session(daemon: daemon, signer: old)
+        #expect(s.attachment?.deviceID == old.deviceID)
+
+        // The daemon's files and the keychain are stood in for: what is
+        // checked here is the order and the outcome — wiped, forgotten,
+        // attached again as somebody the roster has never seen.
+        var wiped = 0
+        let fresh = SoftwareSigner()
+        s.wipeDaemonState = { wiped += 1 }
+        s.forgetKey = { (fresh, MemoryCounterStore()) }
+
+        try await s.startOver()
+        #expect(wiped == 1)
+        #expect(s.deviceID == fresh.deviceID)
+        #expect(s.attachment?.deviceID == fresh.deviceID)
+        #expect(!s.enrolled)
+        #expect(daemon.attachRequest?["device_id"] as? String == fresh.deviceID)
+        #expect(s.lastMessage?.hasPrefix("Fresh start") == true)
+    }
+
     @Test @MainActor func aSecondPresentationWhileOneShowsIsAnsweredAbortedNotStacked() async throws {
         let daemon = try FakeDaemon()
         defer { daemon.close() }
