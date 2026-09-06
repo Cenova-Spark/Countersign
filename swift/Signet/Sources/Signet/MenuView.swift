@@ -22,14 +22,23 @@ struct MenuView: View {
             .labelsHidden()
             .padding(.horizontal, 14).padding(.bottom, 10)
 
-            Group {
-                switch tab {
-                case 0: DevicesView()
-                case 1: PluginsView()
-                default: AuditView()
+            // A fixed height, and the tab scrolls inside it. The window is
+            // sized when it opens, and what a tab shows can grow after that —
+            // the marketplace arrives from a network, an error wraps to three
+            // lines — so content must never be what decides the height, or
+            // it ends up under the footer.
+            ScrollView(.vertical) {
+                Group {
+                    switch tab {
+                    case 0: DevicesView()
+                    case 1: PluginsView()
+                    default: AuditView()
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.bottom, 12)
             }
-            .frame(minHeight: 260, alignment: .top)
+            .frame(height: 420)
 
             Divider()
             HStack {
