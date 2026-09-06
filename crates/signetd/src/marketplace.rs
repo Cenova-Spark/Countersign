@@ -251,9 +251,14 @@ fn refuse_unless_clean(report: &Report) -> Result<(), MarketError> {
     Ok(())
 }
 
-/// A place to fetch into that the daemon does not read.
+/// A place to fetch into that the daemon does not read. Unique per call,
+/// not per name: two fetches of the same plugin in one process — the tests
+/// do this — must not clean up under each other.
 fn staging(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("signetd-market-{}-{name}", std::process::id()))
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("signetd-market-{}-{sequence}-{name}", std::process::id()))
 }
 
 /// Look at a listed plugin without installing it: fetched, checked, and

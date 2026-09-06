@@ -14,7 +14,7 @@ use std::process::{Command, ExitCode};
 use countersign_pack::{HostConfig, PackHost};
 use signetd::audit::AuditStore;
 use signetd::config::{self, Config};
-use signetd::daemon::{runtime_dir, Daemon};
+use signetd::daemon::{runtime_dir, ApprovalRequest, Daemon};
 use signetd::app::{AppDevice, AppDevices};
 use signetd::device::{Device, Devices, MockAction, MockBehaviour, MockDevice};
 use signetd::roster::LocalRoster;
@@ -40,6 +40,7 @@ fn main() -> ExitCode {
         "pair" => pair(&args[1..]),
         "pack" => pack(&args[1..]),
         "enroll" => enroll(&args[1..]),
+        "ask" | "request" => ask(&args[1..]),
         "wipe" => wipe_command(&args[1..]),
         "help" | "--help" | "-h" => {
             print_help();
@@ -79,6 +80,7 @@ fn print_help() {
          \x20 signetd pack remove <name>                    uninstall\n\
          \x20 signetd enroll --subject you@example.com [--display Name]\n\
          \x20                                               enroll the attached device to a person\n\
+         \x20 signetd ask --action NS.VERB --statement TEXT   ask for a countersignature by hand — to try a pack\n\
          \x20 signetd wipe [--yes]                          forget everything the daemon wrote — demos and development\n\
          \n\
          DEVICE MODES  (combine with commas: --device=app,relay)\n\
@@ -654,6 +656,116 @@ fn pack(args: &[String]) -> Result<(), String> {
         }
 
         other => Err(format!("unknown pack command {other:?}; try `signetd pack list`")),
+    }
+}
+
+/// `signetd ask` — a requester typed by hand: what the proxy does for a
+/// statement and the hook for a delete, for any action at all.
+///
+/// A pack classifies what something asks for, and nothing asks for anything
+/// but SQL and deletes today. This is how a pack for any other namespace is
+/// tried: ask, watch the approval window show what the pack made of it, hold
+/// or decline, and read the decision here. Exits non-zero unless approved,
+/// so a script can gate on it the way the hook does.
+fn ask(args: &[String]) -> Result<(), String> {
+    let usage = "usage: signetd ask --action NS.VERB --statement TEXT [--target URI | --fingerprint HEX] \
+                 [--kind KIND] [--advisory JSON] [--ttl SECONDS] [--requester ID] [--json]";
+    let mut action: Option<String> = None;
+    let mut statement: Option<String> = None;
+    let mut target: Option<String> = None;
+    let mut fingerprint: Option<String> = None;
+    let mut kind: Option<String> = None;
+    let mut advisory: Option<String> = None;
+    let mut ttl: Option<u64> = None;
+    let mut requester: Option<String> = None;
+    let mut json = false;
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f.to_string(), Some(v.to_string())),
+            _ => (arg.clone(), None),
+        };
+        let mut value = || {
+            inline
+                .clone()
+                .or_else(|| iter.next().cloned())
+                .ok_or_else(|| format!("{flag} needs a value; {usage}"))
+        };
+        match flag.as_str() {
+            "--action" => action = Some(value()?),
+            "--statement" => statement = Some(value()?),
+            "--target" => target = Some(value()?),
+            "--fingerprint" => fingerprint = Some(value()?),
+            "--kind" => kind = Some(value()?),
+            "--advisory" => advisory = Some(value()?),
+            "--requester" => requester = Some(value()?),
+            "--ttl" => ttl = Some(value()?.parse().map_err(|_| "--ttl takes whole seconds".to_string())?),
+            "--json" => json = true,
+            other => return Err(format!("unexpected argument {other:?}; {usage}")),
+        }
+    }
+    let action = action.ok_or(usage)?;
+    let statement = statement.ok_or(usage)?;
+    let namespace = config::namespace_of(&action).to_string();
+    // Something has to name the target, because that is what an environment
+    // is keyed on. With nothing named, the namespace stands in, which is an
+    // unknown target and therefore production — the friction is the point.
+    if target.is_none() && fingerprint.is_none() {
+        target = Some(format!("{namespace}://unspecified"));
+    }
+    let advisory = match advisory {
+        Some(text) => Some(
+            serde_json::from_str::<serde_json::Value>(&text)
+                .map_err(|e| format!("--advisory is not JSON: {e}"))?,
+        ),
+        None => None,
+    };
+
+    let request = ApprovalRequest {
+        action,
+        target_uri: target,
+        uri_fingerprint: fingerprint,
+        target_kind: kind.unwrap_or(namespace),
+        statement,
+        advisory,
+        requester_id: requester.unwrap_or_else(|| "signetd ask".into()),
+        requester_instance: format!("pid {}", std::process::id()),
+        ttl_ms: ttl.map(|s| s * 1000),
+    };
+
+    let path = socket_path();
+    let mut client = service::Client::connect(&path)
+        .map_err(|e| format!("no daemon to ask at {}: {e}", path.display()))?;
+    if !json {
+        eprintln!("asking — the approval window has it now; hold to approve, or decline");
+    }
+    let response = client.request_approval(&request).map_err(|e| e.to_string())?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&response).map_err(|e| e.to_string())?
+        );
+    } else {
+        println!("{:<12} {}", "decision", response.decision.as_str());
+        println!("{:<12} {}", "why", response.explanation);
+        println!(
+            "{:<12} {} · {} · {}",
+            "shown as", response.environment, response.tier, response.severity
+        );
+        println!("{:<12} {}", "digest", response.digest_short);
+        for warning in &response.warnings {
+            println!("{:<12} {warning}", "warning");
+        }
+        if response.envelope.is_some() {
+            println!("{:<12} signed — a verifier accepts this for exactly this statement and target", "envelope");
+        }
+    }
+    if response.decision == countersign_verify::Decision::Approved {
+        Ok(())
+    } else {
+        Err(format!("not approved: {}", response.decision.as_str()))
     }
 }
 

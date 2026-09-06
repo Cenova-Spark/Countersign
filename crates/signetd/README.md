@@ -286,6 +286,22 @@ what a marketplace distributes. The artifact's hash is checked every start.
 With nothing installed, the daemon falls back to the `countersign-db` binary
 beside its own, so a fresh checkout still classifies SQL.
 
+### Trying a pack
+
+A pack classifies what something asks for. The proxy asks for SQL and the hook
+for a delete; for any other namespace, ask by hand:
+
+```bash
+./target/debug/signetd ask --action deploy.apply --statement "deploy api v2.3 to prod" --target deploy://prod-eu
+```
+
+The approval window shows what the pack made of it — the action it refined
+to, the severity, the lines it rendered — and the decision comes back here,
+with a non-zero exit unless approved, so a script can gate on it the way the
+hook does. A target nobody named is an unknown target, and an unknown target
+is production. The namespace must be presentable: install the pack and turn
+it on first, or the request is refused before any device is asked.
+
 ## Starting over
 
 For demos and development, a fresh start:

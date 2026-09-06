@@ -28,6 +28,9 @@ const FILES: &[(&str, &str)] = &[
 /// Appended to the scaffold's `Cargo.toml`. The template inherits this from
 /// the workspace; a crate on its own has to say it.
 const RELEASE_PROFILE: &str = "\n\
+# Its own workspace, so it builds anywhere — inside another workspace too.\n\
+[workspace]\n\
+\n\
 # Small modules: one codegen unit, link-time optimisation, symbols stripped.\n\
 [profile.release]\n\
 codegen-units = 1\n\
@@ -141,6 +144,7 @@ mod tests {
         assert!(cargo.contains(DEPENDENCY));
         assert!(!cargo.contains("path = \"../../crates"), "points into a checkout that is not there");
         assert!(cargo.contains("[profile.release]"));
+        assert!(cargo.contains("[workspace]"), "a scaffold under another workspace must still build");
         assert!(file(&files, "src/lib.rs").contains("NAMESPACE: &str = \"terraform\""));
         assert!(file(&files, "src/main.rs").contains("countersign_tf::ExamplePack"));
         assert!(file(&files, "README.md").contains("countersign_tf.wasm"));
