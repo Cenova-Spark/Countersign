@@ -154,9 +154,22 @@ Entitlement and Stripe are **M7**, not M5.
   says when the bundled `countersign-db` is what runs, lists the marketplace
   with Install, and installs from a file. Every button is `signetd pack …`
   via `DaemonCLI`, followed by a daemon restart.
-- Not done: `countersign-tf`; the marketplace as a repository of its own with
-  CI running the §8.4 checks (`publish` runs them locally); opening the pull
-  request from the app; `pack info` in the app before an index install.
+- **`signetd ask` and the `countersign-plugin` skill (2026-09-06).** A pack
+  classifies what something asks for, and only SQL and deletes have
+  requesters; `signetd ask --action NS.VERB --statement …` is a requester
+  typed by hand, exiting non-zero unless approved. The Claude Code skill in
+  `.claude/skills/countersign-plugin/` turns "ask me before anything deploys
+  to production" into a scaffolded, classified, tested, built, checked,
+  installed pack and the three `ask` commands to try it; its scripts wrap
+  `pack new` (pointing the dependency at the checkout) and the build-and-info
+  step. Scaffolds carry their own `[workspace]` so they build under this one.
+  Run through once end to end (a deploy pack: plan none, apply high, prod
+  apply critical, refused while off). Its `evals/evals.json` has three
+  prompts for the skill-creator loop, not yet run.
+- Not done: `countersign-tf` (the skill can now make it in minutes); the
+  marketplace as a repository of its own with CI running the §8.4 checks
+  (`publish` runs them locally); opening the pull request from the app;
+  `pack info` in the app before an index install.
 
 ## Decisions M5 needs from Elijah
 

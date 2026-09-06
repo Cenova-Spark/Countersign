@@ -1,0 +1,23 @@
+{
+  "skill_name": "countersign-plugin",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I want to be asked before anything deploys to production. Can you make me a countersign plugin for that? My deploys look like 'deploy api v2.3 to prod-eu' and 'rollback api to v2.2 on prod-eu'.",
+      "expected_output": "A namespace table (deploy: plan/apply/rollback), a pack crate under plugins/countersign-deploy whose tests pass, a wasm module that `signetd pack info` reports with no imports and the deploy namespace, an install, and three `signetd ask` commands. A production apply classifies critical with a 'names production' advisory; a plan classifies none; unknown verbs classify high.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "gate kubectl for me — deletes and anything with --all should need a countersignature, gets and describes shouldn't. i have countersign installed already",
+      "expected_output": "Namespace `kubectl` (or `k8s`) with read/apply/delete/scale actions; delete and any --all/-A/--all-namespaces flag classify critical; get/describe classify none; a built, checked, installed pack and the ask commands to try it; a note that only `signetd ask` or the MCP tool sends kubectl statements today.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Payments over $1,000 should require approval from the physical device, under that they can just go through. Build that as a plugin.",
+      "expected_output": "Namespace `payments` with an amount parsed from the statement; at or above $1000 classifies high with an advisory that shows the amount the pack read; below classifies moderate; an unparseable amount is treated as over the threshold; the pack is built, checked and installed, with ask commands for a small and a large payment.",
+      "files": []
+    }
+  ]
+}
