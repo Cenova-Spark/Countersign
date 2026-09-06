@@ -297,3 +297,37 @@ SHA-256, and lists the namespaces `describe` will claim. A host checks the hash
 **every time it starts the pack**, not only at install — a plugin directory is
 ordinary files, and a classifier swapped under a good manifest is exactly the
 thing that check exists to notice.
+
+### 8.4 The index
+
+A marketplace is a repository holding one `index.json` and a directory per
+plugin, each holding that plugin's manifest and the module it names. The index
+is a list of claims, one per plugin:
+
+```jsonc
+{
+  "v": 1,
+  "plugins": [
+    {
+      "name": "countersign-db",
+      "version": "0.1.0",
+      "description": "SQL statement classification",
+      "path": "countersign-db",          // the directory beside the index: a plain name, never a path
+      "sha256": "…",                     // of the module; the manifest in that directory MUST pin the same
+      "actions": ["sql"],
+      "pure": true
+    }
+  ]
+}
+```
+
+A host installing from an index MUST fetch the manifest and the module from
+the named directory and nowhere else; MUST refuse a `path` that is not a plain
+name; MUST refuse a manifest whose pack is not WebAssembly; MUST refuse unless
+the index's hash, the manifest's pin and the module's bytes all agree; and
+MUST instantiate the module, confirm it imports nothing, and confirm that
+`describe` claims the namespaces, the version and the purity the manifest
+claims — all **before** anything is written where a daemon will find it, and
+whatever the result, installed **off**. The repository's CI runs the same
+checks on every pull request. A host runs them anyway, because it cannot know
+that CI did.

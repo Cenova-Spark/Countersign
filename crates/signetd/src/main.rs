@@ -21,6 +21,7 @@ use signetd::roster::LocalRoster;
 use signetd::scaffold;
 use std::sync::{Arc, Mutex};
 use signetd::interactive::InteractiveDevice;
+use signetd::marketplace::{self, Location};
 use signetd::mcp;
 use signetd::packs;
 use signetd::relay::{RelayConfig, RelayDevice};
@@ -70,7 +71,10 @@ fn print_help() {
          \x20 signetd pack list                             installed plugins, and which are on\n\
          \x20 signetd pack install <dir | file.wasm> [--name N]   install a plugin, switched off\n\
          \x20 signetd pack info <dir | file.wasm | name>     what a plugin claims, before installing it\n\
+         \x20 signetd pack index [--index URL|DIR]           what the marketplace lists\n\
+         \x20 signetd pack install <name> [--index URL|DIR]  install a listed plugin, switched off\n\
          \x20 signetd pack new <name> [--namespace NS]       write a pack crate to start from\n\
+         \x20 signetd pack publish <dir | file.wasm> --into DIR   stage a plugin for a marketplace pull request\n\
          \x20 signetd pack enable|disable <name>            switch a pack's namespaces on or off\n\
          \x20 signetd pack remove <name>                    uninstall\n\
          \x20 signetd enroll --subject you@example.com [--display Name]\n\
@@ -334,6 +338,19 @@ fn pack(args: &[String]) -> Result<(), String> {
     match verb {
         "list" | "ls" => {
             let installed = packs::list(&dir).map_err(|e| e.to_string())?;
+            if rest.iter().any(|a| a == "--json") {
+                let bundled = bundled_packs();
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "packs_dir": dir,
+                        "installed": installed,
+                        "bundled": bundled,
+                        "bundled_runs": installed.is_empty() && !bundled.is_empty(),
+                    })
+                );
+                return Ok(());
+            }
             if installed.is_empty() {
                 println!("no plugins installed in {}", dir.display());
                 println!();
@@ -342,7 +359,16 @@ fn pack(args: &[String]) -> Result<(), String> {
                 println!("  signetd pack install path/to/pack.wasm       # a bare module; the manifest is written for you");
                 println!();
                 println!("Look before installing:   signetd pack info <the same>");
+                println!("From the marketplace:     signetd pack index, then signetd pack install <name>");
                 println!("Write one:                signetd pack new <name>");
+                let bundled = bundled_packs();
+                if !bundled.is_empty() {
+                    println!();
+                    println!(
+                        "Meanwhile {} beside this binary runs, so SQL is classified out of the box.",
+                        bundled.join(", ")
+                    );
+                }
                 return Ok(());
             }
             println!("{:<24} {:<8} {:<7} NAMESPACES", "NAME", "VERSION", "STATE");
@@ -369,25 +395,39 @@ fn pack(args: &[String]) -> Result<(), String> {
         "install" | "add" => {
             let mut source: Option<PathBuf> = None;
             let mut name: Option<String> = None;
+            let mut index: Option<String> = None;
             let mut iter = rest.iter();
             while let Some(arg) = iter.next() {
                 if let Some(v) = arg.strip_prefix("--name=") {
                     name = Some(v.to_string());
                 } else if arg == "--name" {
                     name = iter.next().cloned();
+                } else if let Some(v) = arg.strip_prefix("--index=") {
+                    index = Some(v.to_string());
+                } else if arg == "--index" {
+                    index = iter.next().cloned();
                 } else if source.is_none() {
                     source = Some(PathBuf::from(arg));
                 } else {
                     return Err(format!("unexpected argument {arg:?}"));
                 }
             }
-            let source = source.ok_or("usage: signetd pack install <plugin-dir | pack.wasm> [--name N]")?;
+            let source = source
+                .ok_or("usage: signetd pack install <plugin-dir | pack.wasm | listed-name> [--name N] [--index URL|DIR]")?;
             let installed = if source.is_dir() {
-                packs::install_dir(&source, &dir)
+                packs::install_dir(&source, &dir).map_err(|e| e.to_string())?
+            } else if source.is_file() {
+                packs::install_wasm(&source, &dir, name.as_deref()).map_err(|e| e.to_string())?
+            } else if let Some(listed) = source.to_str().filter(|s| countersign_pack::manifest::check_name(s).is_ok()) {
+                let location = Location::parse(&index.unwrap_or_else(marketplace::index_location));
+                println!("fetching {listed} from {}", location.describe());
+                marketplace::install(&location, listed, &dir).map_err(|e| e.to_string())?
             } else {
-                packs::install_wasm(&source, &dir, name.as_deref())
-            }
-            .map_err(|e| e.to_string())?;
+                return Err(format!(
+                    "{} is not a plugin directory, a module, or a name the index could list",
+                    source.display()
+                ));
+            };
 
             println!("installed {} {} → {}", installed.name, installed.manifest.version, installed.dir.display());
             println!("namespaces {}", installed.namespaces().join(", "));
@@ -406,11 +446,138 @@ fn pack(args: &[String]) -> Result<(), String> {
         }
 
         "info" | "show" | "inspect" => {
-            let source = rest
-                .first()
-                .ok_or("usage: signetd pack info <plugin-dir | pack.wasm | installed-name>")?;
-            let report = packs::inspect(Path::new(source), &dir).map_err(|e| e.to_string())?;
-            print_report(&report, source);
+            let json = rest.iter().any(|a| a == "--json");
+            let mut index: Option<String> = None;
+            let mut source: Option<String> = None;
+            let mut iter = rest.iter().filter(|a| *a != "--json");
+            while let Some(arg) = iter.next() {
+                if let Some(v) = arg.strip_prefix("--index=") {
+                    index = Some(v.to_string());
+                } else if arg == "--index" {
+                    index = iter.next().cloned();
+                } else if source.is_none() {
+                    source = Some(arg.clone());
+                } else {
+                    return Err(format!("unexpected argument {arg:?}"));
+                }
+            }
+            let source = source.ok_or(
+                "usage: signetd pack info <plugin-dir | pack.wasm | installed-name | listed-name> [--index URL|DIR] [--json]",
+            )?;
+            let report = match packs::inspect(Path::new(&source), &dir) {
+                Ok(report) => report,
+                // Not here in any form. The index is the last place to look,
+                // and only for something that could be a name.
+                Err(local) if countersign_pack::manifest::check_name(&source).is_ok() => {
+                    let location = Location::parse(&index.unwrap_or_else(marketplace::index_location));
+                    marketplace::inspect(&location, &source).map_err(|e| format!("{local}; and in the index, {e}"))?
+                }
+                Err(e) => return Err(e.to_string()),
+            };
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "report": report, "disagreements": report.disagreements() })
+                );
+            } else {
+                print_report(&report, &source);
+            }
+            Ok(())
+        }
+
+        "index" | "search" | "available" => {
+            let json = rest.iter().any(|a| a == "--json");
+            let mut index: Option<String> = None;
+            let mut iter = rest.iter().filter(|a| *a != "--json");
+            while let Some(arg) = iter.next() {
+                if let Some(v) = arg.strip_prefix("--index=") {
+                    index = Some(v.to_string());
+                } else if arg == "--index" {
+                    index = iter.next().cloned();
+                } else {
+                    return Err(format!("unexpected argument {arg:?}"));
+                }
+            }
+            let location = Location::parse(&index.unwrap_or_else(marketplace::index_location));
+            let listing = marketplace::load_index(&location).map_err(|e| e.to_string())?;
+            let installed = packs::list(&dir).map_err(|e| e.to_string())?;
+            let state_of = |name: &str| installed.iter().find(|p| p.name == name).map(|p| p.enabled);
+            if json {
+                let plugins: Vec<serde_json::Value> = listing
+                    .plugins
+                    .iter()
+                    .map(|e| {
+                        let mut v = serde_json::to_value(e).expect("an entry serializes");
+                        v["installed"] = serde_json::json!(state_of(&e.name));
+                        v
+                    })
+                    .collect();
+                println!("{}", serde_json::json!({ "index": location.describe(), "plugins": plugins }));
+                return Ok(());
+            }
+            println!("{}", location.describe());
+            if listing.plugins.is_empty() {
+                println!("nothing listed");
+                return Ok(());
+            }
+            println!();
+            println!("{:<24} {:<8} {:<10} NAMESPACES", "NAME", "VERSION", "STATE");
+            for e in &listing.plugins {
+                let state = match state_of(&e.name) {
+                    Some(true) => "on",
+                    Some(false) => "off",
+                    None => "-",
+                };
+                println!("{:<24} {:<8} {:<10} {}", e.name, e.version, state, e.actions.join(", "));
+                if let Some(d) = &e.description {
+                    println!("{:<24} {d}", "");
+                }
+            }
+            println!();
+            println!("Everything listed is WebAssembly, hash-pinned, and checked again on this machine before");
+            println!("it is installed:  signetd pack info <name>   then   signetd pack install <name>");
+            Ok(())
+        }
+
+        "publish" => {
+            let mut source: Option<PathBuf> = None;
+            let mut into: Option<PathBuf> = None;
+            let mut fields = marketplace::PublishFields::default();
+            let mut iter = rest.iter();
+            while let Some(arg) = iter.next() {
+                let mut take = |flag: &str| -> Option<String> {
+                    if let Some(v) = arg.strip_prefix(&format!("{flag}=")) {
+                        Some(v.to_string())
+                    } else if arg == flag {
+                        iter.next().cloned()
+                    } else {
+                        None
+                    }
+                };
+                if let Some(v) = take("--into") {
+                    into = Some(PathBuf::from(v));
+                } else if let Some(v) = take("--description") {
+                    fields.description = Some(v);
+                } else if let Some(v) = take("--license") {
+                    fields.license = Some(v);
+                } else if let Some(v) = take("--source") {
+                    fields.source = Some(v);
+                } else if source.is_none() {
+                    source = Some(PathBuf::from(arg));
+                } else {
+                    return Err(format!("unexpected argument {arg:?}"));
+                }
+            }
+            let usage = "usage: signetd pack publish <plugin-dir | pack.wasm> --into <marketplace-dir> [--description D] [--license L] [--source URL]";
+            let source = source.ok_or(usage)?;
+            let into = into.ok_or(usage)?;
+            let entry = marketplace::publish(&source, &into, &fields).map_err(|e| e.to_string())?;
+            println!("staged {} {} → {}", entry.name, entry.version, into.join(&entry.name).display());
+            println!("index  {}", into.join(marketplace::INDEX_FILE).display());
+            println!();
+            println!("Checked here the way an install checks: WebAssembly, no imports, the hash pinned, and");
+            println!("describe agreeing with the manifest. The pull request is yours to open; its CI runs");
+            println!("the same checks, and every daemon runs them again before starting the pack.");
             Ok(())
         }
 
@@ -562,9 +729,10 @@ fn print_report(report: &packs::Report, source: &str) {
             "module {} — the manifest below is the one `install` would write",
             p.display()
         ),
+        (Source::Index { index, .. }, _) => format!("the index at {index} — fetched and checked, not installed"),
     };
     println!("  from         {from}");
-    if let (Source::Directory(_) | Source::Module(_), Some(on)) = (&report.source, report.installed) {
+    if let (Source::Directory(_) | Source::Module(_) | Source::Index { .. }, Some(on)) = (&report.source, report.installed) {
         println!(
             "  installed    already, {} — `signetd pack remove {}` before installing this one",
             state(on),
@@ -782,6 +950,23 @@ fn default_signet_name() -> String {
 /// packs should be an explicit operator decision, not a discovery mechanism
 /// that picks up whatever happens to be installed. Looking next to our own
 /// executable is the narrowest thing that still works out of the box.
+/// The packs shipped beside this binary: the ones `discover_packs` would start.
+const BUNDLED: &[&str] = &["countersign-db"];
+
+fn bundled_packs() -> Vec<String> {
+    let Ok(exe) = std::env::current_exe() else {
+        return Vec::new();
+    };
+    let Some(dir) = exe.parent() else {
+        return Vec::new();
+    };
+    BUNDLED
+        .iter()
+        .filter(|name| dir.join(name).exists())
+        .map(|name| name.to_string())
+        .collect()
+}
+
 fn discover_packs() -> Vec<PackHost> {
     let Ok(exe) = std::env::current_exe() else {
         return Vec::new();
@@ -791,7 +976,7 @@ fn discover_packs() -> Vec<PackHost> {
     };
 
     let mut packs = Vec::new();
-    for name in ["countersign-db"] {
+    for name in BUNDLED {
         let path = dir.join(name);
         if !path.exists() {
             continue;

@@ -4,6 +4,7 @@ pub mod config;
 pub mod daemon;
 pub mod device;
 pub mod interactive;
+pub mod marketplace;
 pub mod mcp;
 pub mod packs;
 pub mod policy;

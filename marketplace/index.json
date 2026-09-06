@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "plugins": [
+    {
+      "name": "countersign-db",
+      "version": "0.1.0",
+      "description": "SQL statements: what kind, how bad, whether it can be undone, and what the screen should show. No connection, no EXPLAIN — a pure function of the text.",
+      "path": "countersign-db",
+      "sha256": "ff4661be3db3a1968f3ca72885c3094230b6be1bcc0ab2e865592fd86a2d1a1c",
+      "actions": [
+        "sql"
+      ],
+      "pure": true
+    }
+  ]
+}

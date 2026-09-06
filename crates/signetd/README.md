@@ -244,6 +244,27 @@ more. A native pack is not run by `info`. Nothing is installed or switched.
 one in `templates/pack`, renamed. It compiles, its tests are the host's rules,
 and its README walks from `cargo test` to `pack install`.
 
+### The marketplace
+
+An index and a directory per plugin (`marketplace/` in this repository for
+now; pack protocol §8.4 is the format):
+
+```bash
+./target/debug/signetd pack index                    # what is listed
+./target/debug/signetd pack info countersign-db      # fetched and checked here, not installed
+./target/debug/signetd pack install countersign-db   # installed, off
+./target/debug/signetd pack publish path/to/my_pack.wasm --into path/to/marketplace \
+    --description "…" --license Apache-2.0        # staged for a pull request
+```
+
+A name that is not a path is looked up in the index. `COUNTERSIGN_INDEX` or
+`--index` points at another index, a URL or a directory; a checkout's own
+`marketplace/` is how a demo runs offline. Everything installed from an index
+is WebAssembly, and is refused unless the index's hash, the manifest's pin and
+the module agree and `describe` claims what the manifest claims — checked on
+this machine, whatever the repository's CI did. `--json` on `list`, `info` and
+`index` is what the Mac app reads.
+
 Two states, and they are the two the spec already has:
 
 - **Installed** means the directory exists. The daemon knows which namespaces
@@ -290,6 +311,7 @@ in the menu does both, and comes back with a new key and an empty roster.
 | `COUNTERSIGN_SOCK` | Control socket path. |
 | `COUNTERSIGN_RUNTIME_DIR` | Where the socket, mock counter, and app counters live. |
 | `COUNTERSIGN_PACKS_DIR` | Where plugins install. Defaults to `<config>/packs`. |
+| `COUNTERSIGN_INDEX` | The marketplace index: a URL or a directory. Defaults to this repository's `marketplace/`. |
 | `XDG_CONFIG_HOME` | Root for config and the audit trail. |
 
 ## What it writes

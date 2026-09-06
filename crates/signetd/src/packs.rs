@@ -83,7 +83,7 @@ impl StateFile {
 }
 
 /// An installed plugin, as the daemon sees it before running anything.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Installed {
     pub name: String,
     pub dir: PathBuf,
@@ -152,7 +152,7 @@ pub fn install_wasm(file: &Path, dir: &Path, name: Option<&str>) -> Result<Insta
 }
 
 /// Instantiate a module in the sandbox and ask it `describe`.
-fn describe_module(file: &Path, bytes: &[u8]) -> Result<PackInfo, PacksError> {
+pub(crate) fn describe_module(file: &Path, bytes: &[u8]) -> Result<PackInfo, PacksError> {
     let host = PackHost::spawn_wasm(bytes, HostConfig::default())
         .map_err(|e| PacksError::Pack(file.to_path_buf(), e.to_string()))?;
     Ok(host.info().clone())
@@ -160,7 +160,7 @@ fn describe_module(file: &Path, bytes: &[u8]) -> Result<PackInfo, PacksError> {
 
 /// The manifest `install` writes for a bare module: what the module said
 /// about itself, pinned to its bytes.
-fn manifest_for_module(
+pub(crate) fn manifest_for_module(
     file: &Path,
     bytes: &[u8],
     info: &PackInfo,
@@ -201,7 +201,7 @@ fn manifest_for_module(
 /// binary. The sandbox is what makes asking a module safe, and a native pack
 /// has none; what a native pack does is what its manifest says, and the
 /// operator who installs it is trusting the person who built it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Report {
     pub source: Source,
     pub manifest: Manifest,
@@ -218,7 +218,8 @@ pub struct Report {
     pub installed: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Source {
     /// A plugin directory holding a manifest.
     Directory(PathBuf),
@@ -226,15 +227,19 @@ pub enum Source {
     Module(PathBuf),
     /// An installed plugin, named.
     Installed(PathBuf),
+    /// A listed plugin, fetched from an index and checked, not installed.
+    Index { index: String, name: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HashCheck {
     Matches,
     Mismatch { expected: String, actual: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Describe {
     Answered(PackInfo),
     /// Not asked: a native pack is not run by `info`.
