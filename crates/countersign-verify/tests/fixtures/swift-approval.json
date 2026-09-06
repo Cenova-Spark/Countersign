@@ -1,0 +1,17 @@
+{
+  "derivation" : "private scalar = SHA-256(\"countersign-v1 published test key · swift vector\")",
+  "device_id" : "4ba3811d71ac45fc3336bc2d0d0155b9a771520ab077de57d861f155150fc653",
+  "digest_short" : "6a4d 07f3 98bd",
+  "public_key_sec1_uncompressed_hex" : "043ce6ec27552b5eb52abde575dafb05a90395b989d8852d9eb7b5bb42fd1957726936cc1a432eb49412a4a9a7ef98ef5d1e32b1f8e8443b057c01cd2868aab220",
+  "request_digest" : "6a4d07f398bd21baf4cb0a747342222f7b24e53c59b530aedd34108f6956c92d",
+  "request_json" : "{\"action\":\"fs.delete\",\"advisory\":null,\"nonce\":\"Y291bnRlcnNpZ24tdGVzdC12ZWN0b3Itbm9uY2UtMDU\",\"requester\":{\"id\":\"claude-code\",\"instance\":\"swift-vector\"},\"statement\":\"rm demo\/scratch.txt\",\"target\":{\"kind\":\"filesystem\",\"uri_fingerprint\":\"87ed968af4720a7e49a047488402d06deff8e929e3a74b93552b06c510bca416\"},\"ttl_ms\":60000,\"v\":1}",
+  "signature" : {
+    "counter" : 3,
+    "device_id" : "4ba3811d71ac45fc3336bc2d0d0155b9a771520ab077de57d861f155150fc653",
+    "device_unix_ms" : 1757000000000,
+    "dwell_ms" : 5210,
+    "signature" : "2bWgBPlygA3rB2wtpLRN3BPpN8JHSHAA3CgF2R1S9rEbzu8-HLvOZmBVCPVtbbnDs6l6YtSRckOorWWtIBimDg"
+  },
+  "signing_payload_hex" : "636f756e7465727369676e2d7631006a4d07f398bd21baf4cb0a747342222f7b24e53c59b530aedd34108f6956c92d000000000000000300000199155c6200",
+  "WARNING" : "The key below is derived from a published string and lives in ordinary memory. It is exactly what the enclave class forbids for a real device; it exists so countersign-verify can check a signature this Swift package produced."
+}
