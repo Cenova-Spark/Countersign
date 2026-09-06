@@ -263,46 +263,139 @@ struct DeviceRow: View {
     }
 }
 
+/// Installed plugins with their switches, and the marketplace under them.
+/// Every button here runs the daemon's own `signetd pack …`; the tab never
+/// has a second opinion about what a plugin is.
 struct PluginsView: View {
     @EnvironmentObject var session: AppSession
     @State private var busy: String?
     @State private var error: String?
+    @State private var editingIndex = false
+    @State private var indexText = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Installed is on disk. On means its namespaces may reach you. Off refuses them without asking.")
                 .font(.system(size: 11)).foregroundColor(.secondary)
             ForEach(session.plugins) { plugin in
-                HStack {
+                HStack(alignment: .center) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(plugin.name).font(.system(size: 13, weight: .medium))
                         Text("\(plugin.namespaces.joined(separator: ", ")) · \(plugin.kind) · \(plugin.manifest?.version ?? "")")
                             .font(.system(size: 11)).foregroundColor(.secondary)
                     }
                     Spacer()
+                    Button("Remove") { run("remove " + plugin.name) { try await session.removePlugin(plugin.name) } }
+                        .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(.secondary)
+                        .disabled(busy != nil)
                     Toggle("", isOn: Binding(
                         get: { plugin.enabled },
-                        set: { on in
-                            busy = plugin.name
-                            error = nil
-                            Task {
-                                do { try await session.setPlugin(plugin.name, enabled: on) }
-                                catch { self.error = String(describing: error) }
-                                busy = nil
-                            }
-                        }))
+                        set: { on in run(plugin.name) { try await session.setPlugin(plugin.name, enabled: on) } }))
                     .toggleStyle(.switch)
                     .labelsHidden()
                     .disabled(busy != nil)
                 }
             }
             if session.plugins.isEmpty {
-                Text("No plugins installed. Install one with `signetd pack install`.")
+                Text(session.bundled.isEmpty
+                     ? "Nothing installed."
+                     : "Nothing installed. \(session.bundled.joined(separator: ", ")) ships with the app and classifies SQL until something is.")
                     .font(.system(size: 12)).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !session.bundled.isEmpty {
+                Text("\(session.bundled.joined(separator: ", ")) ships with the app and steps aside while anything is installed.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            if let error { Text(error).font(.system(size: 11)).foregroundColor(Theme.refuse) }
+
+            Divider()
+            HStack(alignment: .firstTextBaseline) {
+                Text("Marketplace").font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button(editingIndex ? "Done" : "Where…") {
+                    if editingIndex {
+                        session.indexLocation = indexText
+                        Task { await session.loadIndex() }
+                    } else {
+                        indexText = session.indexLocation
+                    }
+                    editingIndex.toggle()
+                }
+                .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(.secondary)
+                Button("Refresh") { Task { await session.loadIndex() } }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(.secondary)
+            }
+            if editingIndex {
+                TextField("Index URL or folder (empty for the default)", text: $indexText)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { session.indexLocation = indexText; editingIndex = false; Task { await session.loadIndex() } }
+            }
+            ForEach(session.available) { entry in
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.name).font(.system(size: 13, weight: .medium))
+                        Text("\(entry.namespaces.joined(separator: ", ")) · wasm · \(entry.version)")
+                            .font(.system(size: 11)).foregroundColor(.secondary)
+                        if let description = entry.description {
+                            Text(description).font(.system(size: 11)).foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Spacer()
+                    if let on = entry.installed {
+                        Text(on ? "on" : "installed, off").font(.system(size: 11)).foregroundColor(.secondary)
+                    } else {
+                        Button("Install") { run(entry.name) { try await session.installPlugin(named: entry.name) } }
+                            .buttonStyle(.borderedProminent).tint(Theme.amber)
+                            .disabled(busy != nil)
+                    }
+                }
+            }
+            if session.available.isEmpty {
+                Text(session.indexNote ?? "Reading the index…")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Everything listed is WebAssembly, checked on this Mac before it is installed, and installed off.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                Button("Install from a file…", action: installFromFile)
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundColor(.secondary)
+                    .disabled(busy != nil)
+                if let busy {
+                    ProgressView().controlSize(.small)
+                    Text(busy).font(.system(size: 11)).foregroundColor(Theme.amber)
+                }
+            }
+            if let error { Text(error).font(.system(size: 11)).foregroundColor(Theme.refuse).fixedSize(horizontal: false, vertical: true) }
         }
         .padding(.horizontal, 14)
+        .task { if session.available.isEmpty { await session.loadIndex() } }
+    }
+
+    private func run(_ what: String, _ work: @escaping () async throws -> Void) {
+        busy = what
+        error = nil
+        Task {
+            do { try await work() } catch { self.error = String(describing: error) }
+            busy = nil
+        }
+    }
+
+    /// A plugin directory holding a manifest, or a bare `.wasm` module.
+    private func installFromFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.message = "A plugin directory holding countersign-plugin.json, or a .wasm module."
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            run(url.lastPathComponent) { try await session.installPlugin(at: url) }
+        }
     }
 }
 

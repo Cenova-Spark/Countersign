@@ -260,6 +260,29 @@ struct PacksParsing {
     }
 }
 
+@Suite("the marketplace listing")
+struct IndexParsing {
+    @Test func readsWhatSignetdPackIndexWrites() throws {
+        // The shape `signetd pack index --json` prints: the index's entries,
+        // with `installed` null, false or true for this machine.
+        let text = """
+        {"index":"/tmp/marketplace/index.json","plugins":[
+          {"name":"countersign-db","version":"0.1.0","description":"SQL","path":"countersign-db",
+           "sha256":"ff","actions":["sql.execute","sql.ddl"],"pure":true,"installed":null},
+          {"name":"countersign-tf","version":"0.3.1","path":"countersign-tf",
+           "sha256":"aa","actions":["terraform"],"pure":true,"installed":false}
+        ]}
+        """
+        let listing = try PluginIndex.decode(text)
+        #expect(listing.index == "/tmp/marketplace/index.json")
+        #expect(listing.plugins.count == 2)
+        #expect(listing.plugins[0].installed == nil)
+        #expect(listing.plugins[0].namespaces == ["sql"])
+        #expect(listing.plugins[1].description == nil)
+        #expect(listing.plugins[1].installed == false)
+    }
+}
+
 @Suite("paths")
 struct PathsMirrorTheDaemon {
     @Test func theSocketFollowsTheSameRules() {

@@ -85,7 +85,20 @@ public final class AppSession: ObservableObject {
     @Published public private(set) var audit: AuditSummary?
     @Published public private(set) var roster: LocalRoster = LocalRoster(v: 1, records: [])
     @Published public private(set) var plugins: [InstalledPlugin] = []
+    /// The packs shipped beside the daemon, which run while nothing is installed.
+    @Published public private(set) var bundled: [String] = []
+    /// What the marketplace lists, and where that came from or why it could not.
+    @Published public private(set) var available: [AvailablePlugin] = []
+    @Published public private(set) var indexNote: String?
     @Published public private(set) var log: [String] = []
+
+    /// Where the index is: a URL or a directory, empty for the daemon's
+    /// default. Remembered on this Mac, because a demo from a checkout points
+    /// it at a directory and a paying user never touches it.
+    public var indexLocation: String {
+        get { UserDefaults.standard.string(forKey: "indexLocation") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "indexLocation") }
+    }
 
     public private(set) var signer: Signer
     public private(set) var countersigner: Countersigner
@@ -205,6 +218,8 @@ public final class AppSession: ObservableObject {
     public func refresh() async {
         roster = LocalRoster.load()
         plugins = InstalledPlugin.loadAll()
+        bundled = bundledPacks()
+        syncAvailable()
         if let control {
             status = try? await control.deviceStatus()
             audit = try? await control.auditSummary()
@@ -231,9 +246,56 @@ public final class AppSession: ObservableObject {
 
     /// Switch a plugin, then restart our daemon so it takes effect.
     public func setPlugin(_ name: String, enabled: Bool) async throws {
+        try await runPack(["pack", enabled ? "enable" : "disable", name])
+    }
+
+    /// Install a listed plugin, switched off. The daemon restarts so the
+    /// namespace is refused rather than shown unclassified until it is on.
+    public func installPlugin(named name: String) async throws {
+        try await runPack(["pack", "install", name] + indexArguments)
+    }
+
+    /// Install a plugin directory or a bare module from this Mac.
+    public func installPlugin(at url: URL) async throws {
+        try await runPack(["pack", "install", url.path])
+    }
+
+    public func removePlugin(_ name: String) async throws {
+        try await runPack(["pack", "remove", name])
+    }
+
+    /// Ask the daemon's tool what the marketplace lists. Off the main actor,
+    /// because the index may be a network away.
+    public func loadIndex() async {
+        guard let binary = controller.binary else {
+            indexNote = "signetd was not found, so the marketplace cannot be read"
+            return
+        }
+        let arguments = ["pack", "index", "--json"] + indexArguments
+        do {
+            let text = try await Task.detached { try DaemonCLI.run(binary, arguments) }.value
+            let listing = try PluginIndex.decode(text)
+            available = listing.plugins
+            indexNote = listing.index
+        } catch {
+            available = []
+            indexNote = String(describing: error)
+        }
+        syncAvailable()
+    }
+
+    private var indexArguments: [String] {
+        let location = indexLocation.trimmingCharacters(in: .whitespaces)
+        return location.isEmpty ? [] : ["--index", location]
+    }
+
+    /// Run one `signetd pack …`, re-read what is installed, and restart our
+    /// daemon, which reads the packs directory at startup.
+    private func runPack(_ arguments: [String]) async throws {
         guard let binary = controller.binary else { throw DaemonError.notFound }
-        try PackCLI.setEnabled(name, enabled, signetd: binary)
+        _ = try await Task.detached { try DaemonCLI.run(binary, arguments) }.value
         plugins = InstalledPlugin.loadAll()
+        syncAvailable()
         if case .running = controller.state {
             disconnect()
             try controller.restart()
@@ -241,6 +303,22 @@ public final class AppSession: ObservableObject {
         } else {
             lastMessage = "Restart signetd for this to take effect"
         }
+    }
+
+    /// The listing's installed states, from what is on disk.
+    private func syncAvailable() {
+        available = available.map { entry in
+            var entry = entry
+            entry.installed = plugins.first { $0.name == entry.name }?.enabled
+            return entry
+        }
+    }
+
+    /// The packs beside the daemon binary: what it runs when nothing is installed.
+    private func bundledPacks() -> [String] {
+        guard let binary = controller.binary else { return [] }
+        let dir = binary.deletingLastPathComponent()
+        return ["countersign-db"].filter { FileManager.default.isExecutableFile(atPath: dir.appendingPathComponent($0).path) }
     }
 
     /// A fresh start, for demos and development: this Mac's key, the roster,

@@ -14,7 +14,7 @@ rests on. This file is the state, not the plan.
 | M3 `CountersignKit` (Swift) | done | `swift test` in `swift/CountersignKit`; Rust verifies its fixture in `tests/swift_fixture.rs` |
 | M4 the Mac app | done, Touch ID not exercised by a human yet | `swift test` in `swift/Signet`; `swift/Signet/build-app.sh` |
 | **M5 iPhone app + relay** | **in progress — steps 1–2 of 5 done** | `cargo test -p signetd` (`--lib relay`, `--test relay_phone`); `npm test` in `web` (`test/phones.test.js`) |
-| M6 plugins screen, marketplace index, `countersign-tf` | **started 2026-09-05:** `signetd pack info`, `signetd pack new`, `templates/pack` | `cargo test -p signetd` (`packs::tests::info_*`, `scaffold`); `cargo test -p countersign-pack-template` |
+| M6 plugins screen, marketplace index, `countersign-tf` | **mostly done 2026-09-06:** `pack info`/`new`/`index`/`install <name>`/`publish`, `marketplace/`, the Plugins tab; `countersign-tf` not started | `cargo test -p signetd` (`packs::tests::info_*`, `scaffold`, `marketplace`); `swift test` in `swift/Signet` |
 | M7 payment, App Store | not started | — |
 
 **Committed 2026-09-06**, in the order below with the relay and M2 squashed
@@ -139,10 +139,24 @@ Entitlement and Stripe are **M7**, not M5.
   run) and writes it renamed, with the dependency pointed at the repository
   and a release profile appended. **The git dependency only works once this
   work is pushed**; the scaffold's README says how to point at a checkout.
-- Not done: the Plugins screen in the app (the bundled `countersign-db` runs
-  without appearing there — `discover_packs` in `main.rs` spawns it beside
-  the binary, outside `packs.toml`), the marketplace index, `countersign-tf`,
-  and "publish a local pack as a PR".
+- **The marketplace (2026-09-06)** — `crates/signetd/src/marketplace.rs`.
+  `marketplace/` in this repository holds `index.json` and a directory per
+  plugin (the SQL pack is published there); pack protocol §8.4 is the format.
+  `pack index` lists, `pack info <name>` fetches and checks without
+  installing, `pack install <name>` installs off, `pack publish` stages a
+  plugin and its index entry for a pull request. Every install from an index
+  is refused unless it is WebAssembly with no imports, the three hashes
+  agree, and `describe` agrees with the manifest. `COUNTERSIGN_INDEX`/`--index`
+  take a URL or a directory. **The default URL points at this repository on
+  GitHub and works once `marketplace/` is pushed**; until then the app's
+  Plugins tab has a "Where…" field to point at the checkout's directory.
+- **The Plugins tab** lists installed plugins with their switches and Remove,
+  says when the bundled `countersign-db` is what runs, lists the marketplace
+  with Install, and installs from a file. Every button is `signetd pack …`
+  via `DaemonCLI`, followed by a daemon restart.
+- Not done: `countersign-tf`; the marketplace as a repository of its own with
+  CI running the §8.4 checks (`publish` runs them locally); opening the pull
+  request from the app; `pack info` in the app before an index install.
 
 ## Decisions M5 needs from Elijah
 

@@ -88,6 +88,41 @@ public struct InstalledPlugin: Equatable, Identifiable {
     }
 }
 
+/// One listed plugin, as `signetd pack index --json` reports it: the index's
+/// claims, plus whether this machine has it installed and on.
+public struct AvailablePlugin: Codable, Equatable, Identifiable {
+    public var name: String
+    public var version: String
+    public var description: String?
+    public var path: String
+    public var sha256: String
+    public var actions: [String]
+    public var pure: Bool
+    /// `nil` when not installed; otherwise whether it is on.
+    public var installed: Bool?
+
+    public var id: String { name }
+    /// The namespaces, each once, in the order the index lists them.
+    public var namespaces: [String] {
+        var seen: [String] = []
+        for action in actions {
+            let namespace = action.split(separator: ".").first.map(String.init) ?? action
+            if !seen.contains(namespace) { seen.append(namespace) }
+        }
+        return seen
+    }
+}
+
+/// What `signetd pack index --json` prints.
+public struct PluginIndex: Codable, Equatable {
+    public var index: String
+    public var plugins: [AvailablePlugin]
+
+    public static func decode(_ text: String) throws -> PluginIndex {
+        try JSONDecoder().decode(PluginIndex.self, from: Data(text.utf8))
+    }
+}
+
 /// An opaque JSON value kept as-is, for the policy rules a manifest proposes.
 public struct JSONBlob: Codable, Equatable {
     public let text: String
