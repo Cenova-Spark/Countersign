@@ -12,9 +12,11 @@
 //! database is on the far side of it.
 //!
 //! What this buys, and it is not nothing: the gate runs in the harness, before
-//! the tool call, on **every** call. An agent cannot decline to consult it the
-//! way it can decline to call an MCP tool. That makes it stronger than advisory
-//! mode and weaker than the proxy, and the gap is exactly this file.
+//! the tool call, on every call the harness's matcher sends it. An agent cannot
+//! decline to consult it the way it can decline to call an MCP tool. That
+//! makes it stronger than advisory mode and weaker than the proxy, and the gap
+//! is this file plus the matcher: a tool the matcher does not name is never
+//! seen at all. `screen` names the ones that matter and says why.
 //!
 //! # Which way it errs
 //!
@@ -25,7 +27,11 @@
 //! train, and a prompt nobody reads is worse than no prompt.
 //!
 //! So the residual risk is a false negative, and the mitigation is not a longer
-//! verb list. It is moving the gate below the shell.
+//! verb list. It is moving the gate below the shell. Below the shell closes the
+//! shell's routes and no others: a tool that drives Finder trashes a file as
+//! the person, in the person's own process, and no syscall filter can tell the
+//! two apart. That route is closed in the harness or nowhere, and `screen` is
+//! where.
 
 /// Wrappers that are not themselves the command, so the real verb is the next
 /// word along.

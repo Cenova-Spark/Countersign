@@ -227,8 +227,10 @@ non-statement protocol after it.
   it the trust root is theory.
 - **The proxy's registry is hardcoded to the test key.** It should load a signed
   roster and trust one authority key configured out of band. `countersign-hook`
-  has the same shape and now compiles in *two* test keys — the mock's and the
-  remote one — which makes the smell harder to ignore.
+  had the same shape; since 2026-09-06 it loads the daemon's local
+  `roster.json` and compiles in the two test keys — the mock's and the remote
+  one — only under `--accept-test-keys`. The proxy should follow, and both
+  should move from the local roster to a signed one.
 - **A remote approval is a weaker claim, and the spec does not say so.** The
   phone is a second device class: a general-purpose OS, no screen the requesting
   software cannot reach. It signs with a published test key so nothing turns on

@@ -11,16 +11,20 @@ second one lights up the device.
 
 The same reason `countersign-proxy` exists. An MCP tool is advisory: the agent
 chooses whether to call it and chooses whether to honour the answer. A hook is
-run by the harness, before the tool call, on every tool call — the agent is not
-consulted about whether the gate applies, and cannot be talked out of it by
-anything in its context.
+run by the harness, before the tool call, on every tool call its matcher names
+— the agent is not consulted about whether the gate applies, and cannot be
+talked out of it by anything in its context.
 
 It is **not** posture C, and this crate does not claim to be. The proxy is
 posture C because the database is on the far side of it and there is no route
 around. This sits in front of one route to deleting a file: the shell command
 the harness was asked to run. `src/detect.rs` is candid about what that misses.
 The filesystem's real equivalent of the proxy is a FUSE layer or a syscall
-filter returning `EPERM` for `unlink`.
+filter returning `EPERM` for `unlink`. There is a second route the shell gate
+cannot see and a syscall filter would not close either: a tool that drives the
+screen can trash a file through Finder, as you. `src/screen.rs` reads those
+tools: a screenshot passes, a click is refused outright, and the section below
+says why.
 
 Posture B-and-a-half, then. Strictly stronger than asking an agent nicely, and
 strictly weaker than standing between the tool and the syscall.
@@ -45,7 +49,7 @@ Put this in `.claude/settings.local.json`:
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|mcp__computer-use__.*",
         "hooks": [
           {
             "type": "command",
@@ -103,6 +107,7 @@ told why and the refusal is recorded.
 
 | Flag | Meaning |
 |---|---|
+| `--roster-dir PATH` | Where `signetd enroll` wrote `roster.json`. Default: the daemon's config directory. The keys the gate believes come from there. |
 | `--accept-test-keys` | Accept **published test key** signatures. Demos only. |
 | `--socket PATH` | `signetd` control socket. |
 | `--state-dir PATH` | Where device counters are remembered between calls. |
@@ -136,6 +141,72 @@ stopping the daemon.
 The cost is real and worth knowing before you install it: with the daemon
 stopped, every `rm` in this repository is refused until you start it again. The
 message says so and names the fix.
+
+## The screen: looking is free, touching is refused
+
+The first time someone asked an agent under this gate to delete a file without
+`rm`, the agent opened Finder and chose Move to Trash. It was granted the app by
+the desktop app's own dialog, it took screenshots to find the menu, and it
+clicked. Asked again in the same session, it needed no dialog at all, because
+the grant was still live. The hook never saw any of it: the matcher said `Bash`
+and the gate passed every other tool by design.
+
+At the filesystem that delete was you: your Finder, your user, the same
+`unlink` you would make yourself. A FUSE layer keyed on the agent's processes
+would not have seen it either, because Finder is not one of them. And nothing
+about it was particular to files. The same clicks press Apply in a deploy
+console or Confirm on a payment, so whatever a pack gates, a driven screen
+reaches around it. The agent's hand shows in exactly one place, the tool call
+in the harness, so that is where it is stopped.
+
+Stopped, not held. The shell gate holds a command and asks, because a command
+is a statement a person can read and a device can sign byte for byte. A click
+is a coordinate pair. Nothing in it says what it will do, so putting it on the
+dial would be blind signing with a better ceremony.
+
+Looking, though, changes nothing, and refusing it would make every person weigh
+the trade themselves. So the hook reads the computer-use server's calls one by
+one, in `src/screen.rs`:
+
+- **Passes** a batch made only of `screenshot`, `zoom`, `cursor_position` and
+  `wait`; the grant request that makes a screenshot possible at all; the list
+  of what is granted; the choice of monitor. Passes, not allows: the gate has
+  no opinion, and your own permission settings still apply.
+- **Refuses** a batch with any click, key, typed text, scroll, drag or mouse
+  button in it, the whole batch, because it runs as one; a launched app; the
+  clipboard read or written; the guided tour that clicks on your behalf; any
+  action or tool on the server it does not know. The refusal says what does
+  pass, so the agent can take the screenshot and tell you what it sees instead
+  of casting about for another way in.
+
+Two things follow for the install:
+
+- The matcher has to name the server, or the hook is never run for it. The
+  snippet above does. A server the matcher does not name is not seen, however
+  well `src/screen.rs` knows it.
+- Belt and braces, and independent of whether the hook binary exists: deny the
+  tools that touch by their nature in Claude Code's own permissions, in the
+  same settings file. The batch tool cannot go on this list, because a
+  permission rule sees only its name and a screenshot and a click share it. For
+  that one tool the hook is the only gate.
+
+  ```json
+  "permissions": {
+    "deny": [
+      "mcp__computer-use__teach_step",
+      "mcp__computer-use__teach_batch",
+      "mcp__computer-use__request_teach_access",
+      "mcp__computer-use__open_application",
+      "mcp__computer-use__read_clipboard",
+      "mcp__computer-use__write_clipboard"
+    ]
+  }
+  ```
+
+The browser servers are not on the list. The in-app one is confined to web
+pages. The one that drives real Chrome cannot unlink a local file, though it
+can reach whatever a signed-in tab can, and that is a gate for a different
+namespace.
 
 ## Known friction: the acknowledgement fires every time
 

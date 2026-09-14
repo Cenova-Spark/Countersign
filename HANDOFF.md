@@ -166,6 +166,59 @@ Entitlement and Stripe are **M7**, not M5.
   Run through once end to end (a deploy pack: plan none, apply high, prod
   apply critical, refused while off). Its `evals/evals.json` has three
   prompts for the skill-creator loop, not yet run.
+- **The first `fs` pack, and the hook accepts a refined verb (2026-09-06).**
+  `plugins/countersign-txt` (its own workspace) is the skill run end to
+  end on "ask me
+  before deleting a `.txt` file; other files are fine": it claims `fs`, the
+  namespace the hook asks in, and answers `fs.delete.text` (critical),
+  `fs.delete.other` (high) or `fs.delete.unknown` (critical — a tree, a
+  pattern, a script; it cannot see inside). "Other files are fine" is two
+  policy rules in `config.toml`, which the pack's README shows. Doing it
+  surfaced a gap: the hook bound its verification to the literal
+  `fs.delete`, so any approval a pack had refined was refused after the
+  person held. `countersign-hook` now accepts `fs.delete` or a refinement
+  under it (`refines`), which is what pack protocol §4.1 promises, and binds
+  nothing else. The SQL proxy never bound the action at all. A second gap
+  behind it: the hook's registry held only the two published test keys, so
+  an approval from the app's enclave key never verified. It now loads
+  `roster.json` from the daemon's config dir (`--roster-dir`) and adds the
+  test keys only under `--accept-test-keys`; the proxy still has the old
+  shape (NEXT_STEPS §3). Elijah's machine has the hook in
+  `~/.claude/settings.json` for every session, by absolute path to this
+  checkout's debug binary, without the test-key flag. The repo's
+  `.claude/settings.local.json` hook was dropped on that machine, because two
+  hooks meant two requests per delete: the daemon flags the second as "the
+  requester changed" (a new connection), which replaced the one just held.
+  Note for the product: every hook run is a new process, so every hook
+  request carries that flag and needs ACKNOWLEDGE before the dial turns.
+- **The hook reads the screen-driving server: looking passes, touching is
+  refused (2026-09-06).** Asked to delete a file without `rm`, an agent under
+  the hook opened Finder through the desktop app's computer-use server and
+  chose Move to Trash, twice, the second time with no grant dialog because
+  the first grant was still live in the session. The hook saw none of it: the
+  matcher named `Bash`, and the gate passed every other tool by design. That
+  route is not one a FUSE layer or a syscall filter would close either, since
+  Finder is the person's own process and the delete is the person's own
+  `unlink`; it is closed in the harness or nowhere. And it is not an `fs`
+  matter: the same clicks press Apply in a deploy console, so whatever a pack
+  gates, a driven screen reaches around it. `countersign-hook` now reads
+  every call on `mcp__computer-use__` (`screen.rs`): a batch of only
+  screenshot, zoom, cursor_position and wait passes (Pass, not Allow), as do
+  the grant request, the granted list and the monitor switch; anything that
+  touches — a click, a key, text, scroll, drag, a launched app, the
+  clipboard, the teach tools, anything unknown — is refused outright, never
+  asking the daemon, because a click is a coordinate pair and nothing in it
+  can be countersigned. A first cut refused the screenshot too; Elijah's
+  reading was that it made every person weigh the trade themselves, and
+  looking changes nothing. His global `~/.claude/settings.json` matcher is
+  `Bash|mcp__computer-use__.*`, with `permissions.deny` on the tools that
+  touch by nature as belt and braces; the batch tool cannot be on that list,
+  since a permission rule sees only the name, so for it the hook is the only
+  gate. Hooks load at session start. Note for the product: this is a
+  property of the enforcement point, not of the `fs` pack, and the README's
+  postures section now says so; the shipped hook has to carry it whatever
+  pack is installed. The browser servers are deliberately not on the list;
+  the hook's README says why.
 - Not done: `countersign-tf` (the skill can now make it in minutes); the
   marketplace as a repository of its own with CI running the §8.4 checks
   (`publish` runs them locally); opening the pull request from the app;

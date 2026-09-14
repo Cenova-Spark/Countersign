@@ -176,6 +176,15 @@ fully holds.**
 C is buildable from day one, from a different host, by someone who has never
 touched this codebase.
 
+**A driven screen goes around B.** An agent that can inject clicks and
+keystrokes into the person's desktop acts as the person, in the person's own
+applications, and no client chokepoint or process-keyed filter sees it. C
+survives, provided the person's own clients are behind the proxy too, because a
+driven client is the person's client. A harness-level gate cannot name what a
+click will do, so it has to refuse the click rather than hold it, and let a
+screenshot pass; `countersign-hook` does. Whatever a pack gates, this holds:
+the refusal is a property of the enforcement point, not of the `fs` demo.
+
 ### Why the proxy, and not more integrations
 
 You cannot enumerate the agents — new ones ship monthly. You *can* enumerate the

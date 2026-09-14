@@ -74,6 +74,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     let mut socket = signetd::service::socket_path();
     let mut accept_test_keys = false;
     let mut state_dir = signetd::config::config_dir().join("hook-state");
+    let mut roster_dir = signetd::config::config_dir();
     let mut deadline = Duration::from_secs(90);
     let mut explain: Option<String> = None;
 
@@ -87,6 +88,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
         match arg.as_str() {
             "--socket" => socket = PathBuf::from(value("--socket")?),
             "--state-dir" => state_dir = PathBuf::from(value("--state-dir")?),
+            "--roster-dir" => roster_dir = PathBuf::from(value("--roster-dir")?),
             "--accept-test-keys" => accept_test_keys = true,
             "--deadline-ms" => {
                 let raw = value("--deadline-ms")?;
@@ -108,6 +110,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
         socket,
         accept_test_keys,
         state_dir,
+        roster_dir,
         deadline,
     }))
 }
@@ -146,6 +149,7 @@ fn print_help() {
          \x20 --accept-test-keys     accept PUBLISHED TEST KEY signatures (demos only)\n\
          \x20 --socket PATH          signetd control socket\n\
          \x20 --state-dir PATH       where the replay defence is kept between calls\n\
+         \x20 --roster-dir PATH      where `signetd enroll` wrote roster.json (the daemon's config dir)\n\
          \x20 --deadline-ms N        deny on our own initiative after this (default 90000)\n\
          \x20 --explain CMD          print what the detector sees and exit\n\
          \n\
