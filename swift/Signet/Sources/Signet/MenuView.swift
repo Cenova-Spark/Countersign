@@ -26,17 +26,14 @@ struct MenuView: View {
             // sized when it opens, and what a tab shows can grow after that —
             // the marketplace arrives from a network, an error wraps to three
             // lines — so content must never be what decides the height, or
-            // it ends up under the footer.
-            ScrollView(.vertical) {
-                Group {
-                    switch tab {
-                    case 0: DevicesView()
-                    case 1: PluginsView()
-                    default: AuditView()
-                    }
+            // it ends up under the footer. The audit tab scrolls its own log
+            // instead, so the log can take whatever height the tab leaves it.
+            Group {
+                switch tab {
+                case 0: scrolling { DevicesView() }
+                case 1: scrolling { PluginsView() }
+                default: AuditView()
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(.bottom, 12)
             }
             .frame(height: 420)
 
@@ -53,6 +50,14 @@ struct MenuView: View {
             .padding(12)
         }
         .task { await session.refresh() }
+    }
+
+    private func scrolling<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        ScrollView(.vertical) {
+            content()
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.bottom, 12)
+        }
     }
 
     private var header: some View {
@@ -410,6 +415,12 @@ struct PluginsView: View {
 
 struct AuditView: View {
     @EnvironmentObject var session: AppSession
+
+    /// The tail the log shows. A line is identified by its place in the tail,
+    /// so the last place keeps its id as lines arrive and the view can keep
+    /// it in sight.
+    private var tail: [String] { Array(session.log.suffix(40)) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let a = session.audit {
@@ -422,16 +433,25 @@ struct AuditView: View {
             }
             Divider()
             Text("Daemon log").font(.system(size: 11, weight: .semibold)).foregroundColor(.secondary)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(Array(session.log.suffix(40).enumerated()), id: \.offset) { _, line in
-                        Text(line).font(.system(size: 10, design: .monospaced)).foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(Array(tail.enumerated()), id: \.offset) { index, line in
+                            Text(line).font(.system(size: 10, design: .monospaced)).foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id(index)
+                        }
                     }
                 }
+                // The log fills the tab rather than a fixed slice of it, and
+                // opens on its newest line, which is the one worth reading.
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .onAppear { proxy.scrollTo(tail.count - 1, anchor: .bottom) }
+                .onChange(of: session.log.count) { _ in proxy.scrollTo(tail.count - 1, anchor: .bottom) }
             }
-            .frame(maxHeight: 170)
         }
         .padding(.horizontal, 14)
+        .padding(.bottom, 12)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 }
