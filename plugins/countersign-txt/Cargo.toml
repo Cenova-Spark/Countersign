@@ -1,0 +1,27 @@
+[package]
+name = "countersign-txt"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Ask before a .txt file is deleted; let other files go. Reads the shell command the Claude Code hook sends as fs.delete and says which of the two it is, or that it cannot tell."
+
+# `rlib` is what the tests and the binary link; `cdylib` is the WebAssembly
+# build, the form a marketplace lists.
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "countersign-txt"
+path = "src/main.rs"
+
+[dependencies]
+countersign-pack = { path = "/Users/elijahmusaally/Projects/countersign/crates/countersign-pack" }
+
+# Its own workspace, so it builds anywhere — inside another workspace too.
+[workspace]
+
+# Small modules: one codegen unit, link-time optimisation, symbols stripped.
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
