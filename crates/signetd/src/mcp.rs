@@ -62,9 +62,19 @@ pub struct Session {
 
 impl Session {
     /// The live connection, reconnecting if the daemon restarted under us.
-    fn client(&mut self) -> Result<&mut Client, ClientError> {
+    ///
+    /// `for_approval` decides whether Signet is opened to answer. Asking for
+    /// an approval is a reason to open it; asking after the device or the
+    /// audit trail is a question about the machine as it stands, and opening
+    /// an app would change the answer rather than report it.
+    fn client(&mut self, for_approval: bool) -> Result<&mut Client, ClientError> {
         if self.client.is_none() {
-            self.client = Some(Client::connect(&socket_path())?);
+            let socket = socket_path();
+            self.client = Some(if for_approval {
+                crate::launch::connect_for_approval(&socket)?
+            } else {
+                Client::connect(&socket)?
+            });
         }
         Ok(self.client.as_mut().expect("just connected"))
     }
@@ -162,7 +172,7 @@ fn call_tool(id: Value, params: &Value, session: &mut Session) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-    let client = match session.client() {
+    let client = match session.client(name == "request_approval") {
         Ok(c) => c,
         Err(e) => {
             session.reset();

@@ -57,7 +57,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use signetd::daemon::ApprovalRequest;
 use signetd::roster::LocalRoster;
-use signetd::service::Client;
+use signetd::launch::connect_for_approval;
 
 /// The action this gate asks about. Namespaced, like every other verb in the
 /// protocol, and it has to be named in a policy rule's `actions` before the
@@ -266,7 +266,11 @@ fn ask(request: ApprovalRequest, config: &Config) -> Result<Verdict, String> {
         .clone()
         .ok_or("internal: no target fingerprint")?;
 
-    let mut client = Client::connect(&config.socket).map_err(|e| {
+    // Opens Signet if it is closed: a delete is exactly what it is for, and a
+    // person who has to go and start an app first has been handed the gate's
+    // problem. It fails the same way when Signet cannot be opened, and this
+    // gate denies on that like it denies on everything else.
+    let mut client = connect_for_approval(&config.socket).map_err(|e| {
         format!("cannot reach signetd, so nothing can be approved and nothing is deleted: {e}")
     })?;
 

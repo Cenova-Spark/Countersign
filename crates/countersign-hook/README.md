@@ -138,9 +138,12 @@ cannot be persisted, a deadline reached — every one of them denies. A gate tha
 let deletions through whenever its daemon was down would be defeated by
 stopping the daemon.
 
-The cost is real and worth knowing before you install it: with the daemon
-stopped, every `rm` in this repository is refused until you start it again. The
-message says so and names the fix.
+The cost is real and worth knowing before you install it: with nothing to ask,
+every `rm` in this repository is refused until there is something. On a Mac with
+Signet installed the request opens it (`signetd::launch`) and that refusal
+becomes the dial instead; everywhere else — Signet dragged to the Trash,
+`COUNTERSIGN_AUTOSTART=0`, a daemon you run yourself and stop — it stands until
+you start one again. The message says so and names the fix.
 
 ## The screen: looking is free, touching is refused
 

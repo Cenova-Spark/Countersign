@@ -18,7 +18,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use countersign_verify::encoding::{b64url_encode, hex_encode};
 use countersign_verify::{
@@ -407,4 +407,33 @@ fn an_app_cannot_attach_with_a_software_class_or_a_borrowed_id() {
     // The right way in.
     let r = ask(json!({"device_id": app.device_id, "public_key_hex": app.public_key_hex()}));
     assert_eq!(r["result"]["attached"], true, "{r}");
+}
+
+#[test]
+fn a_daemon_with_no_app_on_it_is_not_one_that_can_be_asked() {
+    // `launch::connect_for_approval` is the hook's and the proxy's way in, and
+    // what it owes them is a daemon that can present, not merely one that
+    // answers. A daemon outliving its app — crashed, or killed — answers every
+    // call and aborts every approval.
+    //
+    // Signet is not opened for either half of this: these sockets are in /tmp,
+    // and Signet listens where Signet listens. The elapsed-time assertion is
+    // that fact, and it is the one that keeps every other test in the
+    // workspace from waiting on an app bundle.
+    let served = serve("ready");
+    let started = Instant::now();
+    let refused = signetd::launch::connect_for_approval(&served.socket).unwrap_err();
+    assert!(
+        refused.to_string().contains("not attached to it"),
+        "should name what is missing: {refused}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "waited for an app it had no reason to open"
+    );
+
+    let app = FakeApp::new();
+    app.attach_and_run(&served.socket);
+    signetd::launch::connect_for_approval(&served.socket)
+        .expect("a daemon with an app attached is ready as it is");
 }

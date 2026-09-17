@@ -37,7 +37,7 @@ use countersign_verify::{
     Registry, RustCryptoBackend, VerifyPolicy,
 };
 use signetd::daemon::ApprovalRequest;
-use signetd::service::Client;
+use signetd::launch::connect_for_approval;
 
 /// How the proxy is set up.
 #[derive(Debug, Clone)]
@@ -266,13 +266,15 @@ impl<'a> Session<'a> {
     }
 
     fn authorize(&mut self, sql: &str) -> Verdict {
-        let mut client = match Client::connect(&self.config.socket) {
+        let mut client = match connect_for_approval(&self.config.socket) {
             Ok(c) => c,
             Err(e) => {
-                // No daemon means no approvals are possible. Failing closed is
-                // the only defensible answer: a proxy that waved statements
-                // through whenever its daemon was down would be trivially
-                // defeated by stopping the daemon.
+                // Signet is opened first if it is closed, because a statement
+                // waiting on a person is the moment it is for. When it cannot
+                // be opened there are still no approvals to be had, and failing
+                // closed is the only defensible answer: a proxy that waved
+                // statements through whenever its daemon was down would be
+                // trivially defeated by stopping the daemon.
                 return Verdict::Refuse {
                     message: "countersign: cannot reach signetd, so nothing can be approved".into(),
                     detail: e.to_string(),

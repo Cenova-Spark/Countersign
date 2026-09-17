@@ -52,6 +52,25 @@ Until step 2, the only thing the app will be shown is the ceremony. Approvals
 presented to an unenrolled app are refused by the daemon
 (`signetd::app::AppDevices::accept`).
 
+## Being opened by a request
+
+Countersign's own clients — the hook, the proxy, `signetd ask`, the MCP bridge
+— open the app when they need an approval and nothing is listening
+(`signetd::launch`). Nobody has to remember to keep a menu bar app running for
+a gate to work, and the request that opened it is the one they answer rather
+than one they have to make again.
+
+It is opened only where it is installed (`/Applications`, then
+`~/Applications`, or `SIGNET_APP`), only when the bundle's identifier is
+`com.addisdb.signet`, and only for a client pointed at the socket the app will
+actually listen on — a GUI launch inherits launchd's environment, so a
+`COUNTERSIGN_SOCK` set in a shell never reaches it. `COUNTERSIGN_AUTOSTART=0`
+turns it off, and every client then fails the way it did before.
+
+Opening the app approves nothing: the daemon still presents, the person still
+holds the dial, and the enclave still signs. What changes is which thing they
+meet.
+
 ## What is deliberately not here
 
 - **An approve action anywhere but the approval window.** Not in the menu,

@@ -372,6 +372,11 @@ impl AppDevices {
     }
 }
 
+/// What [`Device::info`] reports when the daemon's device is the app and no
+/// app is attached: a socket that answers, and nothing behind it to be shown a
+/// payload. [`crate::launch`] opens Signet on exactly this.
+pub const NO_APP_ATTACHED: &str = "app (none attached)";
+
 /// The daemon's view: whatever apps are attached, as one `Device`.
 pub struct AppDevice {
     apps: Arc<AppDevices>,
@@ -400,7 +405,7 @@ impl Device for AppDevice {
             Some(a) => Self::info_for(a, self.apps.highest_counter(&a.device_id)),
             None => DeviceInfo {
                 device_id: String::new(),
-                kind: "app (none attached)".into(),
+                kind: NO_APP_ATTACHED.into(),
                 is_test_key: false,
                 class: DeviceClass::Enclave,
                 public_key_hex: String::new(),

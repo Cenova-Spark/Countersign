@@ -21,6 +21,7 @@ use signetd::roster::LocalRoster;
 use signetd::scaffold;
 use std::sync::{Arc, Mutex};
 use signetd::interactive::InteractiveDevice;
+use signetd::launch;
 use signetd::marketplace::{self, Location};
 use signetd::mcp;
 use signetd::packs;
@@ -735,7 +736,9 @@ fn ask(args: &[String]) -> Result<(), String> {
     };
 
     let path = socket_path();
-    let mut client = service::Client::connect(&path)
+    // Opens Signet if it is closed — `ask` is a request for a person, and
+    // there is no version of this where making it was the wrong moment.
+    let mut client = launch::connect_for_approval(&path)
         .map_err(|e| format!("no daemon to ask at {}: {e}", path.display()))?;
     if !json {
         eprintln!("asking — the approval window has it now; hold to approve, or decline");
