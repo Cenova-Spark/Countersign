@@ -49,12 +49,36 @@ runs the ceremony and writes `roster.json` (`roster.rs`), taking the class
 from the device that signed.
 
 **The Swift side** — `swift/CountersignKit` (iOS 16+ already in its
-platforms) and `swift/Signet`. `EnclaveDevice`, `HoldMachine`, `Presentation`,
-`PresentParams`, `PresentOutcome`, `AttachRequest` are in the kit.
-`ApprovalView`, `DeviceScreen`, `HoldDial`, `Theme` are in the **Mac app
-target** and are what the iPhone screen wants; lift them into a shared
-library target (say `swift/SignetUI`) with the two AppKit touches
-(`ApprovalWindowController`, `NSApp`) left behind.
+platforms), `swift/SignetUI`, and `swift/Signet`. `EnclaveDevice`,
+`HoldMachine`, `Presentation`, `PresentParams`, `PresentOutcome`,
+`AttachRequest` are in the kit.
+
+~~Lift the approval screen into a shared target.~~ **Done 2026-09-17.**
+`swift/SignetUI` (macOS 13 + iOS 16, depends only on the kit) holds `Theme`,
+`Legend`, `HoldDial`, `PendingView`, `DeviceScreen`, `Notice`, `Verdict`,
+`nowMs()`, `PendingApproval` and the `ApprovalActions` protocol. `swift/Signet`
+depends on it and keeps only the window: `ApprovalView` is now 37 lines whose
+job is a `minHeight`/`maxHeight`, and it is the one file outside the menu bar
+and the window controller that imports AppKit. **The iPhone target renders
+`PendingView` and writes an `ApprovalActions`; there is nothing else to port.**
+
+Two things the lift found that the plan above had wrong:
+
+- The AppKit touch was not only in `ApprovalWindowController`. `ApprovalView`
+  itself read `NSScreen.main` to size the window, which is exactly the part a
+  phone does not do — so `ApprovalView` stayed behind and `PendingView` became
+  the shared entry point.
+- `PendingApproval` had to leave `SignetCore` as well, because `SignetCore`
+  spawns `Process()` and opens unix sockets and will never build for iOS. It is
+  view state, not crypto, so it went to `SignetUI` rather than the kit, which
+  is deliberately UI-free. `SignetCore` now depends on `SignetUI` and declares
+  `AppSession: ApprovalActions`.
+
+`ApprovalActions` is six verbs and a noun, not one `answer(Decision)`:
+`rendered` is not an answer, `acknowledge` is explicitly not an approval
+(§6.3.2), and `expire` is the clock rather than the person. The noun is
+`deviceNoun` — "this Mac's enrolled key" becomes "this iPhone's" without
+branching.
 
 **Wire shapes** — a `device.present` push is
 `{presentation, arm_delay_ms, hold_ms, enrollment}`; the answer is
@@ -103,7 +127,9 @@ In the order that keeps each step demoable.
    **Listing is a lookup, not a decision.** A relay that padded the list could
    add a name and could not get a signature accepted — `signer_key` still goes
    to the roster. Keep it that way.
-3. **The iPhone app.** New SwiftPM/Xcode target `swift/SignetPhone` (an Xcode
+3. **The iPhone app.** *The shared screen is ready — see `swift/SignetUI`
+   above; this step is now the app around it.* New SwiftPM/Xcode target
+   `swift/SignetPhone` (an Xcode
    project will be needed for signing, capabilities and APNs; keep the code in
    SwiftPM targets and let Xcode consume `Package.swift`). Sign in to the
    relay (WorkOS — the relay's session cookie today; the app needs a token
@@ -257,6 +283,10 @@ daemon wrote (`crates/signetd/src/wipe.rs` is the list) and refuses while a
 daemon listens; **Devices → Start over** in the Mac app stops its daemon, runs
 that, forgets the enclave key (`EnclaveDevice.reset`) and comes back with a
 new one. The relay's copy of a registered phone is not touched by either.
+
+**Verified 2026-09-17, after the `SignetUI` lift:** every suite in `CLAUDE.md`
+green — 443 Rust and clippy clean, 32 TypeScript, 32 kit, **7 SignetUI**, 11
+app, 22 relay. `swift/Signet/build-app.sh` still produces a signed bundle.
 
 **Verified 2026-09-05, end of the day:** every suite in `CLAUDE.md` green —
 422 Rust tests and clippy clean (with both wasm modules built, so nothing

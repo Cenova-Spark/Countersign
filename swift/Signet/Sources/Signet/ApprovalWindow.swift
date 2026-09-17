@@ -6,6 +6,7 @@
 
 import AppKit
 import SignetCore
+import SignetUI
 import SwiftUI
 
 final class ApprovalWindowController: NSWindowController, NSWindowDelegate {

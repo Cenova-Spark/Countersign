@@ -10,17 +10,23 @@
 import CountersignKit
 import SwiftUI
 
-struct HoldDial: View {
+public struct HoldDial: View {
     let hold: HoldMachine
     let enabled: Bool
     /// Redraw trigger from the frame timer.
     let tick: Date
 
+    public init(hold: HoldMachine, enabled: Bool, tick: Date) {
+        self.hold = hold
+        self.enabled = enabled
+        self.tick = tick
+    }
+
     @State private var pressed = false
     /// One full turn of the hand for one full ring.
     private let commitDegrees: Double = 360
 
-    var body: some View {
+    public var body: some View {
         let progress = hold.holdProgress
         let arm = hold.armProgress
         ZStack {

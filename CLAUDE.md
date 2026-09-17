@@ -14,6 +14,7 @@ plan. `NEXT_STEPS.md` is the older list of outstanding protocol work.
 cargo test --workspace && cargo clippy --workspace --all-targets
 (cd sdk/typescript && npm test)              # Node 22.6+, no install
 (cd swift/CountersignKit && swift test)
+(cd swift/SignetUI && swift test)                # the shared approval screen
 (cd swift/Signet && swift test && ./build-app.sh)
 (cd web && npm test)
 cargo run -p countersign-verify --example gen-vectors        # after a deliberate format change only

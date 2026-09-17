@@ -1,4 +1,7 @@
 /target
+
+# SwiftPM build products, in every package.
+.build/
 **/*.rs.bk
 .DS_Store
 

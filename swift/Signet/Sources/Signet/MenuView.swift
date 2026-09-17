@@ -4,6 +4,7 @@
 
 import CountersignKit
 import SignetCore
+import SignetUI
 import SwiftUI
 
 struct MenuView: View {
