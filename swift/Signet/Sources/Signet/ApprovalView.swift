@@ -70,7 +70,7 @@ struct PendingView: View {
                 case .reading, .signing:
                     readingControls
                 case .signed:
-                    Verdict(title: "Countersigned", message: "The daemon has the signature and has verified it against this Mac's enrolled key.", lit: true)
+                    Verdict(title: "Countersigned", message: "The daemon has the signature and has verified it against this Mac's enrolled key.", tone: .signed)
                 case .declined:
                     Verdict(title: "Declined", message: "The daemon has been told no, and the trail records that a person said so.")
                 case .expired:
@@ -180,71 +180,34 @@ struct PendingView: View {
 
 /// The screen: rendered from the render lines the daemon assembled, whose
 /// label and digest the daemon wrote and no pack could.
+///
+/// Three bands, and which one may scroll is the whole design. The bar says
+/// what is being asked and where — the action out of the bytes that will be
+/// signed, the environment and its tier out of the daemon's own config. The
+/// statement is the exact text, however long, and it is the only band that
+/// scrolls. The advisories say what that text will *do*, and they are pinned:
+/// a long command used to push them under the fold, which left the person
+/// reading the noise and deciding without the summary. The digest is the
+/// cross-check and never moves.
 struct DeviceScreen: View {
     let presentation: Presentation
     let enrollment: Bool
 
-    /// The lines at their full height, and the height the window has room
-    /// for. When the first exceeds the second the lines scroll, and the
-    /// screen says so.
+    /// The statement at its full height, and the height there is room for.
+    /// When the first exceeds the second it scrolls, and the screen says so.
     @State private var wanted: CGFloat = 0
     @State private var shown: CGFloat = 0
 
+    private var primaries: [RenderLine] { presentation.render.filter { $0.role == .primary } }
+    private var advisories: [RenderLine] { presentation.render.filter { $0.role == .advisory } }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            let label = presentation.render.first { $0.role == .label }?.text ?? "unclassified"
-            Text(label.uppercased())
-                .font(Theme.label).tracking(2)
-                .foregroundColor(Theme.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(Theme.labelBar(for: enrollment ? .moderate : presentation.severity).opacity(0.85))
-
+            bar
             VStack(alignment: .leading, spacing: 8) {
-                // Only the lines scroll, and only when they must: the frame
-                // below caps the scroll at the lines' own height, so a short
-                // statement takes what it needs and no more. The label above
-                // and the digest below never scroll away. The digest is the
-                // person's cross-check and has to stay in sight.
-                ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(presentation.render.enumerated()), id: \.offset) { _, line in
-                            switch line.role {
-                            case .primary:
-                                Text(line.text).font(Theme.mono).foregroundColor(Theme.ink)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            case .advisory:
-                                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                    Text(line.text).font(Theme.monoSmall).foregroundColor(Theme.caution)
-                                    Text("ADV").font(.system(size: 9, weight: .semibold)).tracking(1.5)
-                                        .foregroundColor(Theme.caution)
-                                        .padding(.horizontal, 3).padding(.vertical, 1)
-                                        .overlay(RoundedRectangle(cornerRadius: 2).stroke(Theme.caution.opacity(0.5), lineWidth: 0.5))
-                                }
-                            case .label, .digest:
-                                EmptyView()
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(GeometryReader { lines in
-                        Color.clear.preference(key: WantedHeight.self, value: lines.size.height)
-                    })
-                }
-                .onPreferenceChange(WantedHeight.self) { wanted = $0 }
-                .frame(maxHeight: wanted > 0 ? wanted : nil)
-                .background(GeometryReader { room in
-                    Color.clear
-                        .onAppear { shown = room.size.height }
-                        .onChange(of: room.size.height) { shown = $0 }
-                })
-                if wanted > shown + 1 {
-                    // Wire spec §6: a long primary line truncates on screen
-                    // with an ellipsis, and the signature covers all of it.
-                    HStack {
-                        Spacer()
-                        Legend(text: "… more below", lit: true)
-                    }
+                statement
+                if !advisories.isEmpty {
+                    advisoryLines.layoutPriority(1)
                 }
                 Divider().background(Theme.screenEdge).padding(.top, 4)
                 HStack {
@@ -257,6 +220,98 @@ struct DeviceScreen: View {
         .background(Theme.screen)
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.screenEdge, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    /// What is being asked, and where it lands.
+    ///
+    /// The action is read back out of `request_json` — the bytes the signature
+    /// covers — and not from anything the daemon said about them, so the verb
+    /// on screen is the verb in the payload. The label is the daemon's, from
+    /// local config, and now carries its tier as a word: the bar's colour said
+    /// production and nothing else did, and a colour is not a word.
+    private var bar: some View {
+        let label = presentation.render.first { $0.role == .label }?.text ?? "unclassified"
+        return VStack(alignment: .leading, spacing: 4) {
+            if let action = presentation.action {
+                row("action", action, mono: true)
+            }
+            row("target", label, mono: false)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Theme.labelBar(for: enrollment ? .moderate : presentation.severity).opacity(0.85))
+    }
+
+    private func row(_ legend: String, _ value: String, mono: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(legend.uppercased())
+                .font(Theme.label).tracking(1.6)
+                .foregroundColor(Theme.ink.opacity(0.6))
+                .frame(width: 52, alignment: .leading)
+            Text(mono ? value : value.uppercased())
+                .font(mono ? Theme.monoSmall : Theme.label)
+                .tracking(mono ? 0 : 2)
+                .foregroundColor(Theme.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// The exact text, and the only thing here that scrolls.
+    private var statement: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(primaries.enumerated()), id: \.offset) { _, line in
+                        Text(line.text).font(Theme.mono).foregroundColor(Theme.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(GeometryReader { lines in
+                    Color.clear.preference(key: WantedHeight.self, value: lines.size.height)
+                })
+            }
+            .onPreferenceChange(WantedHeight.self) { wanted = $0 }
+            // Takes its own height when that fits, and gives before the
+            // advisories or the dial do when it does not. Never nothing: two
+            // lines of the statement stay visible however long it is.
+            .frame(minHeight: min(44, wanted), maxHeight: wanted > 0 ? wanted : nil)
+            .background(GeometryReader { room in
+                Color.clear
+                    .onAppear { shown = room.size.height }
+                    .onChange(of: room.size.height) { shown = $0 }
+            })
+            if wanted > shown + 1 {
+                // Wire spec §6: a long statement truncates on screen with an
+                // ellipsis, and the signature covers all of it. Only the
+                // statement is ever what is cut.
+                HStack {
+                    Spacer()
+                    Legend(text: "… more below", lit: true)
+                }
+            }
+        }
+    }
+
+    /// What the statement will do, according to the pack — pinned, marked
+    /// unverified, and wrapped rather than clipped. Spec §6 requires the
+    /// marker; being able to finish reading the line is ours.
+    private var advisoryLines: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(advisories.enumerated()), id: \.offset) { _, line in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(line.text).font(Theme.monoSmall).foregroundColor(Theme.caution)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("ADV").font(.system(size: 9, weight: .semibold)).tracking(1.5)
+                        .foregroundColor(Theme.caution)
+                        .padding(.horizontal, 3).padding(.vertical, 1)
+                        .overlay(RoundedRectangle(cornerRadius: 2).stroke(Theme.caution.opacity(0.5), lineWidth: 0.5))
+                    Spacer(minLength: 0)
+                }
+            }
+        }
     }
 }
 
@@ -282,14 +337,40 @@ struct Notice: View {
     }
 }
 
+/// How a request ended. `signed` is the one outcome that gets a colour, a
+/// mark and a ground of its own: it is the only one where something now
+/// exists that did not before, and a person who looked away during the hold
+/// should be able to tell from across the room. The payload stays above it,
+/// unchanged — what was approved is as readable after as it was before.
 struct Verdict: View {
+    enum Tone { case plain, signed }
+
     let title: String
     let message: String
-    var lit = false
+    var tone: Tone = .plain
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 20, weight: .semibold)).foregroundColor(lit ? Theme.amber : Theme.ink)
-            Text(message).font(.system(size: 12)).foregroundColor(Theme.inkDim)
+        HStack(alignment: .top, spacing: 11) {
+            if tone == .signed {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 21))
+                    .foregroundColor(Theme.signed)
+                    .accessibilityHidden(true)
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(tone == .signed ? Theme.signed : Theme.ink)
+                Text(message).font(.system(size: 12)).foregroundColor(Theme.inkDim)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(tone == .signed ? 12 : 0)
+        .background(tone == .signed ? Theme.signed.opacity(0.12) : Color.clear)
+        .overlay(alignment: .leading) {
+            if tone == .signed {
+                Rectangle().frame(width: 2).foregroundColor(Theme.signed)
+            }
         }
     }
 }

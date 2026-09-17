@@ -344,6 +344,7 @@ impl Daemon {
                 let presentation = Presentation {
                     render: self.render_lines(
                         &class.label,
+                        class.tier,
                         &classified,
                         &request.statement,
                         &digest_short,
@@ -616,13 +617,19 @@ impl Daemon {
     fn render_lines(
         &self,
         label: &str,
+        tier: crate::config::Tier,
         classified: &Classified,
         statement: &str,
         digest_short: &str,
     ) -> Vec<RenderLine> {
+        // Spec §6: the label is the environment, colour-coded by tier. The
+        // colour carries the whole of that today, and a colour is not a word —
+        // someone who has not seen the other one has nothing to compare it
+        // with, and someone who cannot tell the two apart has nothing at all.
+        // So the tier is said as well as shown.
         let mut lines = vec![RenderLine {
             role: RenderRole::Label,
-            text: label.to_string(),
+            text: format!("{label} · {}", tier.as_str()),
         }];
 
         let body: Vec<RenderLine> = classified
@@ -637,6 +644,20 @@ impl Daemon {
             lines.push(RenderLine::primary(statement.to_string()));
         } else {
             lines.extend(body);
+        }
+
+        // Which pack made this of it. A refined action (`fs.delete.text`) says
+        // a pack looked; it does not say which one is installed and trusted to
+        // decide what a delete means. Advisory, because it is provenance
+        // rather than payload, and §9 leaves no room for a display field that
+        // is neither.
+        if let Some(pack) = self
+            .packs
+            .iter()
+            .find(|p| p.handles(&classified.response.action))
+            .map(|p| p.info().name.clone())
+        {
+            lines.push(RenderLine::advisory(format!("classified by {pack}")));
         }
 
         if self.device.info().is_test_key {

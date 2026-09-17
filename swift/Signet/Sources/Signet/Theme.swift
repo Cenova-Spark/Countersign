@@ -21,6 +21,11 @@ enum Theme {
     static let amber = Color(hex: 0xe08a4c)
     static let caution = Color(hex: 0xd9a441)
     static let refuse = Color(hex: 0xb0261b)
+    /// Signed, and verified by the daemon against this Mac's enrolled key.
+    /// Its own colour because amber was doing this, the ADV markers and the
+    /// index mark all at once, and nobody reads "done" out of the same colour
+    /// as "careful".
+    static let signed = Color(hex: 0x4f9d6b)
 
     /// The label bar takes the severity's colour: red for anything that could
     /// destroy, caution for moderate, steel for the rest.
