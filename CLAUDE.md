@@ -6,7 +6,8 @@ TypeScript SDK, a Swift kit, and a Mac app. Apache-2.0. Specs in `spec/` are
 normative and lead the code.
 
 Read `HANDOFF.md` for where the product build stands and `PRODUCT.md` for the
-plan. `NEXT_STEPS.md` is the older list of outstanding protocol work.
+plan. `NEXT_STEPS.md` is the single list of everything outstanding — work and
+decisions both — and nothing finished stays in it.
 
 ## Commands
 

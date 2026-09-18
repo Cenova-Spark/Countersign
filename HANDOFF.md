@@ -89,7 +89,9 @@ branching.
 
 ## What M5 has to build
 
-In the order that keeps each step demoable.
+The checklist lives in [`NEXT_STEPS.md`](NEXT_STEPS.md) §2, along with
+everything else outstanding. What follows is the detail behind it, in the order
+that keeps each step demoable.
 
 1. ~~**The relay learns the phone's key.**~~ **Done 2026-09-05.** The relay
    has `GET|POST|DELETE /api/phones` (`web/api/phones.js`, `_lib/phones.js`):
@@ -251,6 +253,9 @@ Entitlement and Stripe are **M7**, not M5.
   `pack info` in the app before an index install.
 
 ## Decisions M5 needs from Elijah
+
+Also listed, with the rest of the outstanding decisions, in
+[`NEXT_STEPS.md`](NEXT_STEPS.md) §1.
 
 - ~~Apple Developer Program team~~ — there is one: Developer ID Application
   certificates for team `6T9YRXK82U` are in the login keychain on this Mac
